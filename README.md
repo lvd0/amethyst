@@ -3,7 +3,7 @@ small toy renderer\
 \
 how to compile:\
 windows:\
-    git clone --recursive https://github.com/lvd0/amethyst.git\
+    git clone --recursive https://github.com/lvd0/amethyst.git \
     cd amethyst\
     mkdir build\
     cd build\
@@ -12,7 +12,7 @@ windows:\
     .\test_visbuffer.exe\
 \
 linux:\
-    git clone --recursive https://github.com/lvd0/amethyst.git\
+    git clone --recursive https://github.com/lvd0/amethyst.git \
     cd amethyst\
     mkdir build\
     cd build\
