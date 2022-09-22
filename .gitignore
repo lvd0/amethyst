@@ -1,0 +1,7 @@
+# Project exclude paths
+/cmake-build-debug/
+/cmake-build-release/
+/cmake-build-relwithdebinfo/
+data/models/**
+!data/models/cube
+!data/models/cube/**

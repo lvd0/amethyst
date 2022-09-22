@@ -1,0 +1,42 @@
+[submodule "ext/glfw"]
+	path = ext/glfw
+	url = https://github.com/glfw/glfw
+[submodule "ext/spdlog"]
+	path = ext/spdlog
+	url = https://github.com/gabime/spdlog
+[submodule "ext/VulkanMemoryAllocator"]
+	path = ext/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+[submodule "ext/enkiTS"]
+	path = ext/enkiTS
+	url = https://github.com/dougbinks/enkiTS
+[submodule "ext/SPIRV-Cross"]
+	path = ext/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross
+[submodule "ext/shaderc"]
+	path = ext/shaderc
+	url = https://github.com/google/shaderc
+[submodule "ext/SPIRV-Tools"]
+	path = ext/SPIRV-Tools
+	url = https://github.com/KhronosGroup/SPIRV-Tools
+[submodule "ext/SPIRV-Headers"]
+	path = ext/SPIRV-Headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers
+[submodule "ext/glslang"]
+	path = ext/glslang
+	url = https://github.com/KhronosGroup/glslang
+[submodule "ext/volk"]
+	path = ext/volk
+	url = https://github.com/zeux/volk
+[submodule "ext/glm"]
+	path = ext/glm
+	url = https://github.com/g-truc/glm
+[submodule "ext/KTX-Software"]
+	path = ext/KTX-Software
+	url = https://github.com/KhronosGroup/KTX-Software
+[submodule "ext/cgltf"]
+	path = ext/cgltf
+	url = https://github.com/jkuhlmann/cgltf
+[submodule "ext/meshoptimizer"]
+	path = ext/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer
