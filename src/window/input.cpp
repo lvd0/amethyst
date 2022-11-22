@@ -12,7 +12,7 @@ namespace am {
 
     AM_NODISCARD std::unique_ptr<CInput> CInput::make(CRcPtr<CWindow> window) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         result->_window = std::move(window);
         return std::unique_ptr<Self>(result);
     }

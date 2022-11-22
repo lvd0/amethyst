@@ -1,4 +1,4 @@
-#include <amethyst/graphics/buffer_suballocator.hpp>
+#include <amethyst/graphics/virtual_allocator.hpp>
 #include <amethyst/graphics/async_texture.hpp>
 #include <amethyst/graphics/semaphore.hpp>
 #include <amethyst/graphics/swapchain.hpp>
@@ -7,7 +7,12 @@
 #include <amethyst/graphics/device.hpp>
 #include <amethyst/graphics/queue.hpp>
 
+#include <amethyst/meta/constants.hpp>
 #include <amethyst/meta/hash.hpp>
+
+#if _WIN64
+    #include <vulkan/vulkan_win32.h>
+#endif
 
 #include <optional>
 #include <fstream>
@@ -17,12 +22,11 @@
 #if defined(AM_ENABLE_AFTERMATH)
     AM_NORETURN void aftermath_finalize_crash() noexcept {
         auto status = GFSDK_Aftermath_CrashDump_Status_Unknown;
-        AM_ASSERT(GFSDK_Aftermath_SUCCEED(GFSDK_Aftermath_GetCrashDumpStatus(&status)), "Aftermath: failure");
-        while (status != GFSDK_Aftermath_CrashDump_Status_CollectingDataFailed &&
-               status != GFSDK_Aftermath_CrashDump_Status_Finished) {
+        do {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             AM_ASSERT(GFSDK_Aftermath_SUCCEED(GFSDK_Aftermath_GetCrashDumpStatus(&status)), "Aftermath: failure");
-        }
+        } while (status != GFSDK_Aftermath_CrashDump_Status_CollectingDataFailed &&
+                 status != GFSDK_Aftermath_CrashDump_Status_Finished);
         AM_ASSERT(false, "Aftermath: finalizing crash");
     }
 #endif
@@ -57,6 +61,46 @@ namespace am {
     }
 #endif
 
+#if _WIN64
+    CWindowsSecurityAttributes::CWindowsSecurityAttributes() {
+        security_descriptor = (PSECURITY_DESCRIPTOR)std::calloc(1, SECURITY_DESCRIPTOR_MIN_LENGTH + 2 * sizeof(void**));
+        InitializeSecurityDescriptor(security_descriptor, SECURITY_DESCRIPTOR_REVISION);
+
+        PSID* pp_sid = (PSID*)((PBYTE)security_descriptor + SECURITY_DESCRIPTOR_MIN_LENGTH);
+        PACL* pp_acl = (PACL*)((PBYTE)pp_sid + sizeof(PSID*));
+
+        SID_IDENTIFIER_AUTHORITY sid_id_auth = SECURITY_WORLD_SID_AUTHORITY;
+        AllocateAndInitializeSid(&sid_id_auth, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, pp_sid);
+
+        EXPLICIT_ACCESS explicit_access;
+        ZeroMemory(&explicit_access, sizeof(EXPLICIT_ACCESS));
+        explicit_access.grfAccessPermissions = STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL;
+        explicit_access.grfAccessMode = SET_ACCESS;
+        explicit_access.grfInheritance = INHERIT_ONLY;
+        explicit_access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        explicit_access.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        explicit_access.Trustee.ptstrName = (LPTSTR)*pp_sid;
+        SetEntriesInAcl(1, &explicit_access, nullptr, pp_acl);
+
+        SetSecurityDescriptorDacl(security_descriptor, true, *pp_acl, false);
+        security_attributes.nLength = sizeof(security_attributes);
+        security_attributes.lpSecurityDescriptor = security_descriptor;
+        security_attributes.bInheritHandle = true;
+    }
+
+    CWindowsSecurityAttributes::~CWindowsSecurityAttributes() {
+        PSID* pp_sid = (PSID*)((PBYTE)security_descriptor + SECURITY_DESCRIPTOR_MIN_LENGTH);
+        PACL* pp_acl = (PACL*)((PBYTE)pp_sid + sizeof(PSID*));
+        FreeSid(*pp_sid);
+        LocalFree(*pp_acl);
+        std::free(security_descriptor);
+    }
+
+    const SECURITY_ATTRIBUTES* CWindowsSecurityAttributes::get() const noexcept {
+        return &security_attributes;
+    }
+#endif
+
     CDevice::CDevice() noexcept = default;
 
     CDevice::~CDevice() noexcept {
@@ -66,7 +110,7 @@ namespace am {
 #endif
         while (!_to_delete.empty()) {
             _to_delete.front()._func(this);
-            _to_delete.pop();
+            _to_delete.pop_front();
         }
         for (const auto& [_, layout] : _set_layout_cache) {
             vkDestroyDescriptorSetLayout(_handle, layout, nullptr);
@@ -75,6 +119,7 @@ namespace am {
             vkDestroySampler(_handle, sampler, nullptr);
         }
         AM_LOG_INFO(_logger, "terminating allocator");
+        _virtual_allocators.clear();
         vmaDestroyAllocator(_allocator);
         delete _graphics;
         AM_UNLIKELY_IF(_graphics != _transfer) {
@@ -83,13 +128,13 @@ namespace am {
         AM_UNLIKELY_IF(_transfer != _compute) {
             delete _compute;
         }
-        AM_LOG_INFO(_logger, "terminating device: {}", _properties.deviceName);
+        AM_LOG_INFO(_logger, "terminating device: {}", _properties.properties.deviceName);
         vkDestroyDevice(_handle, nullptr);
     }
 
     AM_NODISCARD CRcPtr<CDevice> CDevice::make(CRcPtr<CContext> context, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         auto logger = spdlog::stdout_color_mt("device");
         AM_LOG_INFO(logger, "initializing device");
         VkPhysicalDeviceVulkan11Features features_11 = {};
@@ -110,21 +155,24 @@ namespace am {
             std::vector<VkPhysicalDevice> devices(count);
             vkEnumeratePhysicalDevices(context->native(), &count, devices.data());
             for (const auto gpu : devices) {
-                VkPhysicalDeviceProperties properties;
-                vkGetPhysicalDeviceProperties(gpu, &properties);
-                AM_LOG_INFO(logger, "- found device: {}", properties.deviceName);
+                result->_gpu_id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+                VkPhysicalDeviceProperties2 properties2 = {};
+                properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                properties2.pNext = &result->_gpu_id;
+                vkGetPhysicalDeviceProperties2(gpu, &properties2);
+                AM_LOG_INFO(logger, "- found device: {}", properties2.properties.deviceName);
                 const auto device_criteria =
                     VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU |
                     VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU |
                     VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU;
-                AM_LIKELY_IF(properties.deviceType & device_criteria) {
-                    AM_LOG_INFO(logger, "- chosen device: {}", properties.deviceName);
-                    const auto driver_major = VK_VERSION_MAJOR(properties.driverVersion);
-                    const auto driver_minor = VK_VERSION_MINOR(properties.driverVersion);
-                    const auto driver_patch = VK_VERSION_PATCH(properties.driverVersion);
-                    const auto vulkan_major = VK_API_VERSION_MAJOR(properties.apiVersion);
-                    const auto vulkan_minor = VK_API_VERSION_MINOR(properties.apiVersion);
-                    const auto vulkan_patch = VK_API_VERSION_PATCH(properties.apiVersion);
+                AM_LIKELY_IF(properties2.properties.deviceType & device_criteria) {
+                    AM_LOG_INFO(logger, "- chosen device: {}", properties2.properties.deviceName);
+                    const auto driver_major = VK_VERSION_MAJOR(properties2.properties.driverVersion);
+                    const auto driver_minor = VK_VERSION_MINOR(properties2.properties.driverVersion);
+                    const auto driver_patch = VK_VERSION_PATCH(properties2.properties.driverVersion);
+                    const auto vulkan_major = VK_API_VERSION_MAJOR(properties2.properties.apiVersion);
+                    const auto vulkan_minor = VK_API_VERSION_MINOR(properties2.properties.apiVersion);
+                    const auto vulkan_patch = VK_API_VERSION_PATCH(properties2.properties.apiVersion);
                     AM_LOG_INFO(logger, "- driver version: {}.{}.{}", driver_major, driver_minor, driver_patch);
                     AM_LOG_INFO(logger, "- vulkan version: {}.{}.{}", vulkan_major, vulkan_minor, vulkan_patch);
                     if (api_version < VK_API_VERSION_1_3) {
@@ -133,7 +181,8 @@ namespace am {
                         features2.pNext = &features_13;
                     }
                     vkGetPhysicalDeviceFeatures2(gpu, &features2);
-                    result->_properties = properties;
+                    vkGetPhysicalDeviceMemoryProperties(gpu, &result->_memory_props);
+                    result->_properties = properties2;
                     result->_features_11 = features_11;
                     result->_features_12 = features_12;
                     result->_features_13 = features_13;
@@ -144,6 +193,7 @@ namespace am {
             }
             AM_ASSERT(result->_gpu, "no suitable GPU found in the system");
         }
+        bool add_ext_memory = false;
         { // Logical Device selection
             AM_LOG_INFO(logger, "initializing device queues");
             uint32 families_count;
@@ -248,7 +298,16 @@ namespace am {
                     } break;
 
                     case EDeviceExtension::ExternalMemory: {
-                        enabled_extensions.emplace_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+                        if (api_version < VK_API_VERSION_1_2) {
+                            enabled_extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
+                            enabled_extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+                        }
+#if _WIN64
+                        enabled_extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+#else
+                        enabled_extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
+                        add_ext_memory = true;
                     } break;
 
                     case EDeviceExtension::BufferDeviceAddress: {
@@ -277,6 +336,9 @@ namespace am {
             if (has_extension(VK_EXT_DEBUG_MARKER_EXTENSION_NAME)) {
                 enabled_extensions.emplace_back(VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
                 result->_features_custom.debug_names = true;
+            }
+            if (has_extension(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME)) {
+                enabled_extensions.emplace_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
             }
 #endif
 #if defined(AM_ENABLE_AFTERMATH)
@@ -365,8 +427,13 @@ namespace am {
             AM_VULKAN_CHECK(logger, vmaCreateAllocator(&allocator_info, &result->_allocator));
         }
         { // CBufferSuballocator initialization
-            result->_vertex_buffer_suballocator = CBufferSuballocator::make(result, EBufferUsage::VertexBuffer | EBufferUsage::TransferDST);
-            result->_index_buffer_suballocator = CBufferSuballocator::make(result, EBufferUsage::IndexBuffer | EBufferUsage::TransferDST);
+            result->_virtual_allocators.resize((uint32)EVirtualAllocatorKind::Count);
+            result->_virtual_allocators[(uint32)EVirtualAllocatorKind::VertexBuffer] =
+                CVirtualAllocator::make(result, EBufferUsage::VertexBuffer | EBufferUsage::TransferDST);
+            result->_virtual_allocators[(uint32)EVirtualAllocatorKind::IndexBuffer] =
+                CVirtualAllocator::make(result, EBufferUsage::IndexBuffer | EBufferUsage::TransferDST);
+            result->_virtual_allocators[(uint32)EVirtualAllocatorKind::StagingBuffer] =
+                CVirtualAllocator::make(result, EBufferUsage::TransferSRC, true);
         }
         result->_logger = std::move(logger);
         result->_context = std::move(context);
@@ -418,19 +485,35 @@ namespace am {
         return _logger.get();
     }
 
+    const VkPhysicalDeviceProperties& CDevice::properties() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _properties.properties;
+    }
+
     AM_NODISCARD const VkPhysicalDeviceLimits& CDevice::limits() const noexcept {
         AM_PROFILE_SCOPED();
-        return _properties.limits;
+        return _properties.properties.limits;
     }
 
-    AM_NODISCARD CBufferSuballocator* CDevice::vertex_buffer_allocator() noexcept {
+    AM_NODISCARD const uint8 (&CDevice::uuid() const noexcept)[VK_UUID_SIZE] {
         AM_PROFILE_SCOPED();
-        return _vertex_buffer_suballocator.get();
+        return _gpu_id.deviceUUID;
     }
 
-    AM_NODISCARD CBufferSuballocator* CDevice::index_buffer_allocator() noexcept {
+    AM_NODISCARD CVirtualAllocator* CDevice::virtual_allocator(EVirtualAllocatorKind kind) noexcept {
         AM_PROFILE_SCOPED();
-        return _index_buffer_suballocator.get();
+        return _virtual_allocators[(uint32)kind].get();
+    }
+
+    AM_NODISCARD uint32 CDevice::memory_type_index(uint32 filter, EMemoryProperty flags) noexcept {
+        AM_PROFILE_SCOPED();
+        const auto v_flags = prv::as_vulkan(flags);
+        for (uint32 i = 0; i < _memory_props.memoryTypeCount; ++i) {
+            if ((filter & (1 << i)) && (_memory_props.memoryTypes[i].propertyFlags & v_flags) == v_flags) {
+                return i;
+            }
+        }
+        return (uint32)-1;
     }
 
     AM_NODISCARD bool CDevice::feature_support(EDeviceFeature feature) const noexcept {
@@ -447,6 +530,23 @@ namespace am {
         AM_UNREACHABLE();
     }
 
+    AM_NODISCARD std::vector<SHeapBudget> CDevice::heap_budgets() const noexcept {
+        AM_PROFILE_SCOPED();
+        std::vector<VmaBudget> budgets(_memory_props.memoryHeapCount);
+        vmaGetHeapBudgets(_allocator, budgets.data());
+        std::vector<SHeapBudget> result;
+        result.reserve(_memory_props.memoryHeapCount);
+        for (auto& budget : budgets) {
+            result.push_back({
+                budget.statistics.blockCount,
+                budget.statistics.allocationCount,
+                budget.statistics.blockBytes,
+                budget.statistics.allocationBytes
+            });
+        }
+        return result;
+    }
+
     AM_NODISCARD uint32 CDevice::acquire_image(CSwapchain* swapchain, const CSemaphore* semaphore) const noexcept {
         AM_PROFILE_SCOPED();
         uint32 index;
@@ -459,38 +559,28 @@ namespace am {
         return index;
     }
 
-    AM_NODISCARD STextureInfo CDevice::sample(const CAsyncTexture* texture, SSamplerInfo info) noexcept {
+    AM_NODISCARD STextureInfo CDevice::sample(const CAsyncTexture* texture, SSamplerInfo info, bool reduction) noexcept {
         AM_PROFILE_SCOPED();
-        return sample(texture->handle(), info);
+        return sample(texture->handle(), info, reduction);
     }
 
-    AM_NODISCARD STextureInfo CDevice::sample(const CImage* texture, SSamplerInfo info) noexcept {
+    AM_NODISCARD STextureInfo CDevice::sample(const CImage* image, SSamplerInfo info, bool reduction) noexcept {
         AM_PROFILE_SCOPED();
-        auto sampler = acquire_cached_item(info);
-        if (!sampler) {
-            VkSamplerCreateInfo sampler_info = {};
-            sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            sampler_info.magFilter = prv::as_vulkan(info.filter);
-            sampler_info.minFilter = prv::as_vulkan(info.filter);
-            sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            sampler_info.addressModeU = prv::as_vulkan(info.address_mode);
-            sampler_info.addressModeV = prv::as_vulkan(info.address_mode);
-            sampler_info.addressModeW = prv::as_vulkan(info.address_mode);
-            sampler_info.mipLodBias = 0.0f;
-            sampler_info.anisotropyEnable = std::fpclassify(info.anisotropy) != FP_ZERO;
-            sampler_info.maxAnisotropy = info.anisotropy;
-            sampler_info.compareEnable = false;
-            sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
-            sampler_info.minLod = 0.0f;
-            sampler_info.maxLod = 8.0f;
-            sampler_info.borderColor = prv::as_vulkan(info.border_color);
-            sampler_info.unnormalizedCoordinates = false;
-            AM_VULKAN_CHECK(_logger, vkCreateSampler(_handle, &sampler_info, nullptr, &sampler));
-            set_cached_item(info, sampler);
-        }
+        auto sampler = _make_sampler(info, reduction);
         return {
-            texture->view(),
-            sampler
+            image->view(),
+            sampler,
+            prv::as_vulkan(info.layout)
+        };
+    }
+
+    AM_NODISCARD STextureInfo CDevice::sample(const CImageView* view, SSamplerInfo info, bool reduction) noexcept {
+        AM_PROFILE_SCOPED();
+        auto sampler = _make_sampler(info, reduction);
+        return {
+            view->native(),
+            sampler,
+            prv::as_vulkan(info.layout)
         };
     }
 
@@ -517,7 +607,7 @@ namespace am {
     void CDevice::cleanup_after(uint32 frames, std::function<void(const Self*)>&& func) noexcept {
         AM_PROFILE_SCOPED();
         AM_LOG_INFO(_logger, "cleanup payload enqueued, after: {} frames", frames);
-        _to_delete.push({
+        _to_delete.push_back({
             ._frames = frames,
             ._elapsed = 0,
             ._func = std::move(func)
@@ -531,10 +621,10 @@ namespace am {
         }
         auto* current = &_to_delete.front();
         while (current) {
-            AM_UNLIKELY_IF(current->_elapsed++ == current->_frames) {
+            AM_UNLIKELY_IF(current->_elapsed == current->_frames) {
                 AM_LOG_INFO(_logger, "cleaning up payload: {}", (const void*)current);
                 current->_func(this);
-                _to_delete.pop();
+                _to_delete.pop_front();
                 AM_UNLIKELY_IF(!_to_delete.empty()) {
                     current = &_to_delete.front();
                 } else {
@@ -544,6 +634,10 @@ namespace am {
                 current = nullptr;
             }
         }
+
+        for (auto& each : _to_delete) {
+            each._elapsed++;
+        }
     }
 
     void CDevice::wait_idle() const noexcept {
@@ -552,5 +646,38 @@ namespace am {
         _transfer->wait_idle();
         _compute->wait_idle();
         AM_VULKAN_CHECK(_logger, vkDeviceWaitIdle(_handle));
+    }
+
+    AM_NODISCARD VkSampler CDevice::_make_sampler(SSamplerInfo info, bool reduction) noexcept {
+        AM_PROFILE_SCOPED();
+        auto sampler = acquire_cached_item(info);
+        if (!sampler) {
+            VkSamplerCreateInfo sampler_info = {};
+            sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sampler_info.magFilter = prv::as_vulkan(info.filter);
+            sampler_info.minFilter = prv::as_vulkan(info.filter);
+            sampler_info.mipmapMode = prv::as_vulkan(info.mip_mode);
+            sampler_info.addressModeU = prv::as_vulkan(info.address_mode);
+            sampler_info.addressModeV = prv::as_vulkan(info.address_mode);
+            sampler_info.addressModeW = prv::as_vulkan(info.address_mode);
+            sampler_info.mipLodBias = 0.0f;
+            sampler_info.anisotropyEnable = std::fpclassify(info.anisotropy) != FP_ZERO;
+            sampler_info.maxAnisotropy = info.anisotropy;
+            sampler_info.compareEnable = false;
+            sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
+            sampler_info.minLod = 0.0f;
+            sampler_info.maxLod = 16.0f;
+            sampler_info.borderColor = prv::as_vulkan(info.border_color);
+            sampler_info.unnormalizedCoordinates = false;
+            VkSamplerReductionModeCreateInfo reduction_mode_info = {};
+            if (reduction) {
+                reduction_mode_info.sType = VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO;
+                reduction_mode_info.reductionMode = prv::as_vulkan(info.reduction_mode);
+                sampler_info.pNext = &reduction_mode_info;
+            }
+            AM_VULKAN_CHECK(_logger, vkCreateSampler(_handle, &sampler_info, nullptr, &sampler));
+            set_cached_item(info, sampler);
+        }
+        return sampler;
     }
 } // namespace am

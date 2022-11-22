@@ -36,9 +36,11 @@ namespace am {
         }
 
 #if defined(_WIN32)
+        DWORD high;
         auto handle = CreateFileW(path.native().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         auto mapping = CreateFileMappingW(handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
-        auto size = GetFileSize(handle, nullptr);
+        auto size = (uint64)GetFileSize(handle, &high);
+        size |= ((uint64)high << 32);
         auto data = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, size);
         AM_UNLIKELY_IF(!data) {
             return EErrorType::InternalError;
@@ -53,8 +55,8 @@ namespace am {
 #endif
         result->_handle = reinterpret_cast<void*>(handle);
         result->_mapping = static_cast<void*>(mapping);
-        result->_size = size;
         result->_data = static_cast<const void*>(data);
+        result->_size = size;
         return CRcPtr<Self>::make(result.release());
     }
 

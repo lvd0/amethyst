@@ -40,3 +40,10 @@
 [submodule "ext/meshoptimizer"]
 	path = ext/meshoptimizer
 	url = https://github.com/zeux/meshoptimizer
+[submodule "ext/implot"]
+	path = ext/implot
+	url = https://github.com/epezent/implot
+[submodule "ext/imgui"]
+	path = ext/imgui
+	url = https://github.com/ocornut/imgui
+	branch = docking

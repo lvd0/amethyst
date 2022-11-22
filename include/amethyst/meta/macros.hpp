@@ -109,6 +109,12 @@
     #define AM_FALLTHROUGH
 #endif
 
+#if defined(AM_CUDA_COMPAT)
+    #define AM_CONSTEXPR inline
+#else
+    #define AM_CONSTEXPR constexpr
+#endif
+
 #if defined(__clang__) || defined(__GNUC__)
     #define AM_LIKELY_IF(cnd) if (__builtin_expect(!!(cnd), true))
     #define AM_UNLIKELY_IF(cnd) if (__builtin_expect(!!(cnd), false))

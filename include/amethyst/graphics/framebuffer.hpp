@@ -17,8 +17,8 @@ namespace am {
     struct SFramebufferAttachmentInfo {
         uint32 index = 0;
         EImageUsage usage = {};
-        uint32 layers = 0;
-        uint32 mips = 0;
+        uint32 layers = 1;
+        uint32 mips = 1;
     };
 
     struct SFramebufferReferenceInfo {
@@ -54,7 +54,7 @@ namespace am {
         AM_NODISCARD const CImage* image(uint32) const noexcept;
         AM_NODISCARD const CRenderPass* render_pass() const noexcept;
 
-        void resize(uint32, uint32) noexcept;
+        bool resize(uint32, uint32) noexcept;
         void update_attachment(uint32, const CImage*) noexcept;
 
     private:

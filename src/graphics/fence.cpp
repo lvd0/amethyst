@@ -10,7 +10,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CFence> CFence::make(CRcPtr<CDevice> device, bool signaled) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         VkFenceCreateInfo fence_info = {};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0;
@@ -63,7 +63,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CThreadSafeFence> CThreadSafeFence::make(CRcPtr<CDevice> device, bool signaled) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         result->_fence = CFence::make(std::move(device), signaled);
         return CRcPtr<Self>::make(result);
     }

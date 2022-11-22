@@ -14,7 +14,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CDescriptorPool> CDescriptorPool::make(CRcPtr<CDevice> device) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         auto current = _native_make(device.get());
         AM_LOG_INFO(device->logger(), "creating descriptor pool: {}", (const void*)current._handle);
         result->_handles.emplace_back(current);
@@ -38,6 +38,8 @@ namespace am {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, std::min(device->limits().maxDescriptorSetUniformBuffers, 16384u) },
             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, std::min(device->limits().maxDescriptorSetStorageBuffers, 16384u) },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, std::min(device->limits().maxDescriptorSetStorageImages, 16384u) },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, std::min(device->limits().maxDescriptorSetSamplers, 16384u) },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, std::min(device->limits().maxDescriptorSetSampledImages, 16384u) },
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, std::min(device->limits().maxDescriptorSetSampledImages, 16384u) }
         });
         VkDescriptorPoolCreateInfo pool_info = {};

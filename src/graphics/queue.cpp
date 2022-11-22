@@ -19,7 +19,7 @@ namespace am {
 
     AM_NODISCARD CQueue* CQueue::make(CDevice* device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         auto logger = spdlog::stdout_color_mt(info.name);
         result->_handle = info.handle;
         result->_family = info.family;

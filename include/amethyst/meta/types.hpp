@@ -1,5 +1,7 @@
 #pragma once
 
+#include <amethyst/meta/macros.hpp>
+
 #include <type_traits>
 #include <cstdint>
 

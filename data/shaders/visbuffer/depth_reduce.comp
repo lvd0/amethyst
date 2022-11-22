@@ -1,0 +1,19 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (set = 0, binding = 0, r32f) uniform image2D u_depth_pyramid;
+layout (set = 0, binding = 1) uniform sampler2D u_scene_depth;
+
+layout (push_constant)
+uniform Constants {
+    uint width;
+    uint height;
+};
+
+void main() {
+    const uvec2 position = gl_GlobalInvocationID.xy;
+    const vec4 depths = textureGather(u_scene_depth, (vec2(position) + vec2(0.5)) / vec2(width, height));
+    imageStore(u_depth_pyramid, ivec2(position), vec4(max(max(depths.x, depths.y), max(depths.z, depths.w))));
+}

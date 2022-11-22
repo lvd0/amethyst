@@ -72,4 +72,8 @@ namespace am {
         _width = (uint32)new_width;
         _height = (uint32)new_height;
     }
+
+    void CWindow::close() noexcept {
+        glfwSetWindowShouldClose(_handle, true);
+    }
 } // namespace am

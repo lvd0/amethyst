@@ -24,10 +24,10 @@ namespace am {
         }
     }
 
-    AM_NODISCARD CRcPtr<CSwapchain> CSwapchain::make(CRcPtr<CDevice> device, CRcPtr<CWindow> window) noexcept {
+    AM_NODISCARD CRcPtr<CSwapchain> CSwapchain::make(CRcPtr<CDevice> device, CRcPtr<CWindow> window, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
-        _native_make(device.get(), window.get(), result);
+        auto* result = new Self();
+        _native_make(device.get(), window.get(), std::move(info), result);
         result->_device = std::move(device);
         result->_window = std::move(window);
         return CRcPtr<Self>::make(result);
@@ -53,6 +53,11 @@ namespace am {
         return _height;
     }
 
+    AM_NODISCARD uint32 CSwapchain::image_count() const noexcept {
+        AM_PROFILE_SCOPED();
+        return (uint32)_images.size();
+    }
+
     AM_NODISCARD const CImage* CSwapchain::image(uint32 index) const noexcept {
         AM_PROFILE_SCOPED();
         return _images[index].get();
@@ -69,12 +74,24 @@ namespace am {
     }
 
     void CSwapchain::recreate() noexcept {
-        AM_PROFILE_SCOPED();
-        _native_make(_device.get(), _window.get(), this);
+        recreate({
+            .vsync = _vsync,
+            .srgb = _srgb
+        });
         _is_lost = false;
     }
 
-    void CSwapchain::_native_make(CDevice* device, CWindow* window, Self* result) noexcept {
+    void CSwapchain::recreate(SCreateInfo&& info) noexcept {
+        AM_PROFILE_SCOPED();
+        _native_make(_device.get(), _window.get(), {
+            .usage = (EImageUsage)_images[0]->usage(),
+            .vsync = info.vsync,
+            .srgb = info.srgb
+        }, this);
+        _is_lost = false;
+    }
+
+    void CSwapchain::_native_make(CDevice* device, CWindow* window, SCreateInfo&& info, Self* result) noexcept {
         AM_PROFILE_SCOPED();
         AM_LOG_INFO(device->logger(), "initializing swapchain");
         if (!result->_surface) {
@@ -115,8 +132,12 @@ namespace am {
         std::vector<VkSurfaceFormatKHR> surface_formats(format_count);
         AM_VULKAN_CHECK(device->logger(), vkGetPhysicalDeviceSurfaceFormatsKHR(device->gpu(), result->_surface, &format_count, surface_formats.data()));
         auto format = surface_formats[0];
+        auto req_format = VK_FORMAT_B8G8R8A8_UNORM;
+        if (info.srgb) {
+            req_format = VK_FORMAT_B8G8R8A8_SRGB;
+        }
         for (const auto& each : surface_formats) {
-            AM_LIKELY_IF(each.format == VK_FORMAT_B8G8R8A8_SRGB && each.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            AM_LIKELY_IF(each.format == req_format && each.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 format = each;
                 break;
             }
@@ -131,13 +152,15 @@ namespace am {
         swapchain_info.imageColorSpace = format.colorSpace;
         swapchain_info.imageExtent = { result->_width, result->_height };
         swapchain_info.imageArrayLayers = 1;
-        swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        swapchain_info.imageUsage = prv::as_vulkan(info.usage);
         swapchain_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         swapchain_info.queueFamilyIndexCount = 1;
         swapchain_info.pQueueFamilyIndices = &family;
         swapchain_info.preTransform = capabilities.currentTransform;
         swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        swapchain_info.presentMode = info.vsync ?
+            VK_PRESENT_MODE_FIFO_KHR :
+            VK_PRESENT_MODE_IMMEDIATE_KHR;
         swapchain_info.clipped = true;
         if (result->_handle) {
             swapchain_info.oldSwapchain = result->_handle;
@@ -150,6 +173,7 @@ namespace am {
                     vkDestroySwapchainKHR(device->native(), handle, nullptr);
                 });
         }
+        result->_vsync = info.vsync;
         AM_VULKAN_CHECK(device->logger(), vkCreateSwapchainKHR(device->native(), &swapchain_info, nullptr, &result->_handle));
 
         std::vector<VkImage> images;
@@ -178,7 +202,7 @@ namespace am {
             raw.usage = swapchain_info.imageUsage;
             raw.samples = VK_SAMPLE_COUNT_1_BIT;
             raw.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-            raw.format = result->_format;
+            raw.format = { result->_format };
             raw.layout = VK_IMAGE_LAYOUT_UNDEFINED;
             raw.layers = 1;
             raw.mips = 1;

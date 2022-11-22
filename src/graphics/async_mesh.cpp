@@ -7,6 +7,8 @@
 
 #include <TaskScheduler.h>
 
+#include <glm/geometric.hpp>
+
 #include <numeric>
 #include <cstring>
 #include <vector>
@@ -17,8 +19,10 @@ namespace am {
     CAsyncMesh::~CAsyncMesh() noexcept {
         AM_PROFILE_SCOPED();
         wait();
-        _device->vertex_buffer_allocator()->free(std::move(_vertices));
-        _device->index_buffer_allocator()->free(std::move(_indices));
+        auto* vertex_allocator = _device->virtual_allocator(EVirtualAllocatorKind::VertexBuffer);
+        auto* index_allocator = _device->virtual_allocator(EVirtualAllocatorKind::IndexBuffer);
+        vertex_allocator->free(std::move(_vertices));
+        index_allocator->free(std::move(_indices));
     }
 
     AM_NODISCARD CRcPtr<CAsyncMesh> CAsyncMesh::sync_make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
@@ -70,12 +74,12 @@ namespace am {
                     meshopt_optimizeVertexCache(
                         opt_indices.data(),
                         opt_indices.data(),
-                        data.indices.size(),
+                        opt_indices.size(),
                         total_vertex);
                     meshopt_optimizeOverdraw(
                         opt_indices.data(),
                         opt_indices.data(),
-                        data.indices.size(),
+                        opt_indices.size(),
                         opt_geometry.data(),
                         total_vertex,
                         sizeof(prv::SVertex),
@@ -83,28 +87,23 @@ namespace am {
                     meshopt_optimizeVertexFetch(
                         opt_geometry.data(),
                         opt_indices.data(),
-                        data.indices.size(),
+                        opt_indices.size(),
                         opt_geometry.data(),
                         vertex_count,
                         sizeof(prv::SVertex));
                 }
-                auto vertex_staging = CTypedBuffer<float32>::make(device, {
-                    .usage = EBufferUsage::TransferSRC,
-                    .memory = memory_auto,
-                    .capacity = opt_geometry.size(),
-                    .staging = true
-                });
-                vertex_staging->insert(opt_geometry);
-                auto vertex_dest = device->vertex_buffer_allocator()->allocate(vertex_staging->size_bytes());
+                const auto geometry_bytes = size_bytes(opt_geometry);
+                auto* staging_allocator = device->virtual_allocator(EVirtualAllocatorKind::StagingBuffer);
+                auto* vertex_allocator = device->virtual_allocator(EVirtualAllocatorKind::VertexBuffer);
+                auto vertex_staging = staging_allocator->allocate(geometry_bytes, alignof(float32));
+                vertex_staging.insert(opt_geometry.data(), vertex_staging.size());
+                auto vertex_dest = vertex_allocator->allocate(vertex_staging.size(), alignof(float32));
 
-                auto index_staging = CTypedBuffer<uint32>::make(device, {
-                    .usage = EBufferUsage::TransferSRC,
-                    .memory = memory_auto,
-                    .capacity = opt_indices.size(),
-                    .staging = true
-                });
-                index_staging->insert(opt_indices);
-                auto index_dest = device->index_buffer_allocator()->allocate(index_staging->size_bytes());
+                const auto indices_bytes = size_bytes(opt_indices);
+                auto* index_allocator = device->virtual_allocator(EVirtualAllocatorKind::IndexBuffer);
+                auto index_staging = staging_allocator->allocate(indices_bytes, alignof(uint32));
+                index_staging.insert(opt_indices.data(), index_staging.size());
+                auto index_dest = index_allocator->allocate(index_staging.size(), alignof(uint32));
 
                 auto transfer_cmds = CCommandBuffer::make(device, {
                     .queue = EQueueType::Transfer,
@@ -112,20 +111,21 @@ namespace am {
                     .index = thread
                 });
                 transfer_cmds->begin()
-                    .copy_buffer(vertex_staging->info(), vertex_dest.handle->info(vertex_dest.offset))
-                    .copy_buffer(index_staging->info(), index_dest.handle->info(index_dest.offset))
+                    .copy_buffer(vertex_staging.info(), vertex_dest.info())
+                    .copy_buffer(index_staging.info(), index_dest.info())
                     .end();
                 auto fence = CFence::make(device, false);
                 device->transfer_queue()->submit({ {
-                    .stage_mask = EPipelineStage::None,
+                    .stage_mask = EPipelineStage::TopOfPipe,
                     .command = transfer_cmds.get(),
                     .wait = nullptr,
                     .signal = nullptr,
                 } }, fence.get());
-
                 result->_vertices = vertex_dest;
                 result->_indices = index_dest;
                 fence->wait();
+                staging_allocator->free(std::move(vertex_staging));
+                staging_allocator->free(std::move(index_staging));
             });
         device->context()->scheduler()->AddTaskSetToPipe(result->_task.get());
 
@@ -133,24 +133,24 @@ namespace am {
         return result;
     }
 
-    AM_NODISCARD const SBufferSlice* CAsyncMesh::vertices() const noexcept {
+    AM_NODISCARD const CBufferSlice* CAsyncMesh::vertices() const noexcept {
         AM_PROFILE_SCOPED();
         return &_vertices;
     }
 
-    AM_NODISCARD const SBufferSlice* CAsyncMesh::indices() const noexcept {
+    AM_NODISCARD const CBufferSlice* CAsyncMesh::indices() const noexcept {
         AM_PROFILE_SCOPED();
         return &_indices;
     }
 
     AM_NODISCARD uint64 CAsyncMesh::vertex_offset() const noexcept {
         AM_PROFILE_SCOPED();
-        return _vertices.offset / sizeof(prv::SVertex);
+        return _vertices.offset() / sizeof(prv::SVertex);
     }
 
     AM_NODISCARD uint64 CAsyncMesh::index_offset() const noexcept {
         AM_PROFILE_SCOPED();
-        return _indices.offset / sizeof(uint32);
+        return _indices.offset() / sizeof(uint32);
     }
 
     AM_NODISCARD bool CAsyncMesh::is_ready() const noexcept {

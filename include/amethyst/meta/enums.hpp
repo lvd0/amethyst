@@ -2,8 +2,8 @@
 
 #include <amethyst/meta/macros.hpp>
 
-#include <vulkan/vulkan.h>
 #include <volk.h>
+#include <vulkan/vulkan.h>
 
 namespace am {
     // VkSampleCountFlags
@@ -16,7 +16,7 @@ namespace am {
         s32 = VK_SAMPLE_COUNT_32_BIT,
         s64 = VK_SAMPLE_COUNT_64_BIT
     };
-    
+
     // VkImageUsageFlags
     enum class EImageUsage {
         TransferSRC = VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -38,7 +38,7 @@ namespace am {
         InvocationMaskHUAWEI = VK_IMAGE_USAGE_INVOCATION_MASK_BIT_HUAWEI,
         ShadingRateImageNV = VK_IMAGE_USAGE_SHADING_RATE_IMAGE_BIT_NV
     };
-    
+
     // VkFormat
     enum class EResourceFormat {
         Undefined = VK_FORMAT_UNDEFINED,
@@ -243,7 +243,7 @@ namespace am {
         ASTC12x10SfloatBlock = VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK,
         ASTC12x12SfloatBlock = VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK,
     };
-    
+
     // VkImageLayout
     enum class EImageLayout {
         Undefined = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -440,6 +440,12 @@ namespace am {
         CubicImg = VK_FILTER_CUBIC_IMG,
     };
 
+    // VkSamplerMipmapMode
+    enum class EMipMode {
+        Nearest = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        Linear = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+    };
+
     // VkBorderColor
     enum class EBorderColor {
         FloatTransparentBlack = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
@@ -485,6 +491,67 @@ namespace am {
         MissNV = VK_SHADER_STAGE_MISS_BIT_NV,
         IntersectionNV = VK_SHADER_STAGE_INTERSECTION_BIT_NV,
         CallableNV = VK_SHADER_STAGE_CALLABLE_BIT_NV,
+    };
+
+    // VkSamplerReductionMode
+    enum class EReductionMode {
+        WeightedAverage = VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE,
+        Min = VK_SAMPLER_REDUCTION_MODE_MIN,
+        Max = VK_SAMPLER_REDUCTION_MODE_MAX,
+    };
+
+    // VkDescriptorType
+    enum class EDescriptorType {
+        Sampler = VK_DESCRIPTOR_TYPE_SAMPLER,
+        CombinedImageSampler = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        SampledImage = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        StorageImage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        UniformTexelBuffer = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+        StorageTexelBuffer = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
+        UniformBuffer = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        StorageBuffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        UniformBufferDynamic = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        StorageBufferDynamic = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
+        InputAttachment = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
+        InlineUniformBlock = VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK,
+        AccelerationStructure = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+        AccelerationStructureNV = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV,
+        MutableVALVE = VK_DESCRIPTOR_TYPE_MUTABLE_VALVE,
+        SampleWeightImageQCOM = VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM,
+        BlockMatchImageQCOM = VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM,
+    };
+
+    // VkQueryPipelineStatisticFlagBits
+    enum class EQueryPipelineStatistics {
+        InputAssemblyVertices = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT,
+        InputAssemblyPrimitives = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT,
+        VertexShaderInvocations = VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT,
+        GeometryShaderInvocations = VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT,
+        GeometryShaderPrimitives = VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT,
+        ClippingInvocations = VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT,
+        ClippingPrimitives = VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT,
+        FragmentShaderInvocations = VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT,
+        TessellationControlShaderPatches = VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT,
+        TessellationEvaluationShaderInvocations = VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT,
+        ComputeShaderInvocations = VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT,
+    };
+
+    // VkQueryType
+    enum class EQueryType {
+        Occlusion = VK_QUERY_TYPE_OCCLUSION,
+        PipelineStatistics = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+        Timestamp = VK_QUERY_TYPE_TIMESTAMP,
+        ResultStatusOnly = VK_QUERY_TYPE_RESULT_STATUS_ONLY_KHR,
+        TransformFeedbackStream = VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT,
+        PerformanceQuery = VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR,
+        AccelerationStructureCompactedSize = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+        AccelerationStructureSerializationSize = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR,
+        AccelerationStructureCompactedSizeNV = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_NV,
+        PerformanceQueryINTEL = VK_QUERY_TYPE_PERFORMANCE_QUERY_INTEL,
+        VideoEncodeBitstreamBufferRange = VK_QUERY_TYPE_VIDEO_ENCODE_BITSTREAM_BUFFER_RANGE_KHR,
+        PrimitivesGenerated = VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT,
+        AccelerationStructureSerializationBottomLevelPointers = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR,
+        AccelerationStructureSize = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR
     };
 
     namespace prv {
@@ -558,12 +625,11 @@ namespace am {
             AM_UNREACHABLE();
         }
 
-#define AS_VULKAN_SPECIALIZATION(InT, OutT)                                \
-        template <>                                                        \
+#define AS_VULKAN_SPECIALIZATION(InT, OutT)                         \
+        template <>                                                 \
         AM_NODISCARD constexpr auto as_vulkan(InT value) noexcept { \
-            return static_cast<OutT>(value);                               \
+            return static_cast<OutT>(value);                        \
         }
-
 
         template <typename E>
         AM_NODISCARD constexpr auto as_underlying(E e) noexcept {
@@ -584,9 +650,14 @@ namespace am {
         AS_VULKAN_SPECIALIZATION(EBufferUsage, VkBufferUsageFlags)
         AS_VULKAN_SPECIALIZATION(EMemoryProperty, VkMemoryPropertyFlags)
         AS_VULKAN_SPECIALIZATION(EFilter, VkFilter)
+        AS_VULKAN_SPECIALIZATION(EMipMode, VkSamplerMipmapMode)
         AS_VULKAN_SPECIALIZATION(EBorderColor, VkBorderColor)
         AS_VULKAN_SPECIALIZATION(EAddressMode, VkSamplerAddressMode)
         AS_VULKAN_SPECIALIZATION(EShaderStage, VkShaderStageFlagBits)
+        AS_VULKAN_SPECIALIZATION(EReductionMode, VkSamplerReductionMode)
+        AS_VULKAN_SPECIALIZATION(EDescriptorType, VkDescriptorType)
+        AS_VULKAN_SPECIALIZATION(EQueryPipelineStatistics, VkQueryPipelineStatisticFlags)
+        AS_VULKAN_SPECIALIZATION(EQueryType, VkQueryType)
 #undef AS_VULKAN_SPECIALIZATION
     }
 } // namespace am

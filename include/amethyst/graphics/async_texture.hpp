@@ -26,14 +26,18 @@ namespace am {
 
     struct SSamplerInfo {
         EFilter filter = {};
+        EMipMode mip_mode = {};
         EBorderColor border_color = {};
         EAddressMode address_mode = {};
+        EReductionMode reduction_mode = {};
+        EImageLayout layout = EImageLayout::ShaderReadOnlyOptimal;
         float32 anisotropy = 0;
     };
 
     struct STextureInfo {
         VkImageView handle = {};
         VkSampler sampler = {};
+        VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     };
 
     class AM_MODULE CAsyncTexture : public IRefCounted {

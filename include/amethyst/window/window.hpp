@@ -41,6 +41,7 @@ namespace am {
 
         AM_NODISCARD bool is_open() const noexcept;
         void update_viewport() noexcept;
+        void close() noexcept;
 
     private:
         CWindow() noexcept;

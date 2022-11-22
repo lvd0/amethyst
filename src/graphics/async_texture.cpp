@@ -1,5 +1,6 @@
 #include <amethyst/core/file_view.hpp>
 
+#include <amethyst/graphics/virtual_allocator.hpp>
 #include <amethyst/graphics/command_buffer.hpp>
 #include <amethyst/graphics/async_texture.hpp>
 #include <amethyst/graphics/typed_buffer.hpp>
@@ -59,18 +60,14 @@ namespace am {
                     auto format = data.type == ETextureType::Color ? KTX_TTF_BC7_RGBA : KTX_TTF_BC5_RG;
                     AM_ASSERT(!ktxTexture2_TranscodeBasis(texture, format, KTX_TF_HIGH_QUALITY), "transcoding failure");
                 }
-                auto staging = CTypedBuffer<uint8>::make(device, {
-                    .usage = EBufferUsage::TransferSRC,
-                    .memory = am::memory_auto,
-                    .capacity = texture->dataSize,
-                    .staging = true
-                });
-                staging->insert(texture->pData, texture->dataSize);
+                auto* staging_allocator = device->virtual_allocator(EVirtualAllocatorKind::StagingBuffer);
+                auto staging = staging_allocator->allocate(texture->dataSize);
+                staging.insert(texture->pData, texture->dataSize);
                 auto image = CImage::make(device, {
                     .queue = EQueueType::Transfer,
                     .samples = EImageSampleCount::s1,
                     .usage = EImageUsage::Sampled | EImageUsage::TransferDST,
-                    .format = static_cast<EResourceFormat>(texture->vkFormat),
+                    .format = { static_cast<EResourceFormat>(texture->vkFormat) },
                     .layout = EImageLayout::Undefined,
                     .layers = 1,
                     .mips = texture->numLevels,
@@ -98,12 +95,12 @@ namespace am {
                 for (uint32 mip = 0; mip < texture->numLevels; ++mip) {
                     uint64 offset;
                     ktxTexture_GetImageOffset(ktxTexture(texture), mip, 0, 0, &offset);
-                    transfer_cmds->copy_buffer_to_image(staging->info(offset), image.get(), mip);
+                    transfer_cmds->copy_buffer_to_image(staging.info(offset), image.get(), mip);
                 }
                 transfer_cmds->transfer_ownership(*device->transfer_queue(), *device->graphics_queue(), {
                     .image = image.get(),
                     .source_stage = EPipelineStage::Transfer,
-                    .dest_stage = EPipelineStage::None,
+                    .dest_stage = EPipelineStage::BottomOfPipe,
                     .source_access = EResourceAccess::TransferWrite,
                     .dest_access = EResourceAccess::None,
                     .old_layout = EImageLayout::TransferDSTOptimal,
@@ -113,7 +110,7 @@ namespace am {
                 }).end();
                 auto transfer_done = CSemaphore::make(device);
                 device->transfer_queue()->submit({ {
-                    .stage_mask = EPipelineStage::None,
+                    .stage_mask = EPipelineStage::TopOfPipe,
                     .command = transfer_cmds.get(),
                     .wait = nullptr,
                     .signal = transfer_done.get(),
@@ -127,7 +124,7 @@ namespace am {
                 AM_UNLIKELY_IF(device->transfer_queue()->family() != device->graphics_queue()->family()) {
                     ownership_cmds->transfer_ownership(*device->transfer_queue(), *device->graphics_queue(), {
                         .image = image.get(),
-                        .source_stage = EPipelineStage::None,
+                        .source_stage = EPipelineStage::TopOfPipe,
                         .dest_stage = EPipelineStage::FragmentShader,
                         .source_access = EResourceAccess::None,
                         .dest_access = EResourceAccess::ShaderRead,
@@ -148,6 +145,7 @@ namespace am {
                 result->_handle = std::move(image);
                 ktxTexture_Destroy(ktxTexture(texture));
                 fence->wait();
+                staging_allocator->free(std::move(staging));
             });
         device->context()->scheduler()->AddTaskSetToPipe(result->_task.get());
 

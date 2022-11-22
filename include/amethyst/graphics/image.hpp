@@ -5,6 +5,7 @@
 #include <amethyst/graphics/device.hpp>
 #include <amethyst/graphics/queue.hpp>
 
+#include <amethyst/meta/constants.hpp>
 #include <amethyst/meta/macros.hpp>
 #include <amethyst/meta/enums.hpp>
 #include <amethyst/meta/types.hpp>
@@ -24,7 +25,10 @@ namespace am {
         VkImageUsageFlags usage = {};
         VkSampleCountFlagBits samples = {};
         VkImageAspectFlags aspect = {};
-        VkFormat format = {};
+        struct {
+            VkFormat internal;
+            VkFormat view;
+        } format = {};
         VkImageLayout layout = {};
         uint32 layers = 0;
         uint32 mips = 0;
@@ -39,7 +43,10 @@ namespace am {
             EQueueType queue = EQueueType::Graphics;
             EImageSampleCount samples = EImageSampleCount::s1;
             EImageUsage usage = {};
-            EResourceFormat format = {};
+            struct {
+                EResourceFormat internal = {};
+                EResourceFormat view = {};
+            } format = {};
             EImageLayout layout = EImageLayout::Undefined;
             uint32 layers = 1;
             uint32 mips = 1;
@@ -57,7 +64,8 @@ namespace am {
         AM_NODISCARD VkImageUsageFlags usage() const noexcept;
         AM_NODISCARD VkSampleCountFlagBits samples() const noexcept;
         AM_NODISCARD VkImageAspectFlags aspect() const noexcept;
-        AM_NODISCARD VkFormat format() const noexcept;
+        AM_NODISCARD VkFormat internal_format() const noexcept;
+        AM_NODISCARD VkFormat view_format() const noexcept;
         AM_NODISCARD uint32 width() const noexcept;
         AM_NODISCARD uint32 height() const noexcept;
         AM_NODISCARD uint32 layers() const noexcept;
@@ -72,13 +80,44 @@ namespace am {
         VkImageUsageFlags _usage = {};
         VkSampleCountFlagBits _samples = {};
         VkImageAspectFlags _aspect = {};
-        VkFormat _format = {};
+        struct {
+            VkFormat _internal;
+            VkFormat _view;
+        } _format = {};
         uint32 _layers = 0;
         uint32 _mips = 0;
         uint32 _width = 0;
         uint32 _height = 0;
         bool _owning = false;
 
+        CRcPtr<CDevice> _device;
+    };
+
+    class AM_MODULE CImageView : public IRefCounted {
+    public:
+        using Self = CImageView;
+        struct SCreateInfo {
+            CRcPtr<const CImage> image;
+            EResourceFormat format;
+            uint32 mip = all_mips;
+            uint32 layer = all_layers;
+        };
+
+        ~CImageView() noexcept;
+
+        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, SCreateInfo&&) noexcept;
+        AM_NODISCARD static CRcPtr<Self> from_image(const CImage*) noexcept;
+
+        AM_NODISCARD VkImageView native() const noexcept;
+        AM_NODISCARD const CImage* image() const noexcept;
+
+    private:
+        CImageView() noexcept;
+
+        VkImageView _handle = {};
+        bool _owning = false;
+
+        CRcPtr<const CImage> _image;
         CRcPtr<CDevice> _device;
     };
 } // namespace am

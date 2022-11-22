@@ -25,11 +25,18 @@
     };
 #endif
 
+#if defined(__cplusplus)
+struct alignas(16) SCameraData {
+#else
 struct SCameraData {
+#endif
     mat4 projection;
     mat4 view;
     mat4 proj_view;
     vec4 position;
+    vec4 frustum[6];
+    float p_near;
+    float p_far;
 };
 
 struct STransformData {
@@ -57,6 +64,21 @@ struct SDirectionalLight {
     float _pad2;
 };
 
+struct SGLSLDrawCommandIndirect {
+    am_glsl_uint32 indices;
+    am_glsl_uint32 instances;
+    am_glsl_uint32 first_index;
+    am_glsl_int32 vertex_offset;
+    am_glsl_uint32 first_instance;
+};
+
+struct SAABB {
+    vec4 center;
+    vec4 extents;
+    vec4 min;
+    vec4 max;
+};
+
 struct SObjectData {
     am_glsl_uint32 transform_index[2];
     am_glsl_uint32 albedo_index;
@@ -66,6 +88,9 @@ struct SObjectData {
     am_glsl_uint64 index_address;
     am_glsl_int32 vertex_offset;
     am_glsl_uint32 index_offset;
+    am_glsl_uint32 indirect_offset;
+    SGLSLDrawCommandIndirect indirect_data;
+    SAABB aabb;
 };
 
 #if !defined(__cplusplus)

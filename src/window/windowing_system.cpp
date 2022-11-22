@@ -14,7 +14,7 @@ namespace am {
     AM_NODISCARD std::unique_ptr<CWindowingSystem> CWindowingSystem::make() noexcept {
         AM_PROFILE_SCOPED();
         AM_ASSERT(glfwInit(), "windowing system could not initialize");
-        auto result = new Self();
+        auto* result = new Self();
         return std::unique_ptr<Self>(result);
     }
 

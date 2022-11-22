@@ -5,9 +5,14 @@
 #include <amethyst/graphics/device.hpp>
 #include <amethyst/graphics/queue.hpp>
 
+#include <amethyst/meta/constants.hpp>
 #include <amethyst/meta/macros.hpp>
 #include <amethyst/meta/enums.hpp>
 #include <amethyst/meta/types.hpp>
+
+#if _WIN64
+    #include <vulkan/vulkan_win32.h>
+#endif
 
 #include <vulkan/vulkan.h>
 #include <volk.h>
@@ -18,7 +23,7 @@
 #include <vector>
 
 namespace am {
-    struct STypedBufferInfo {
+    struct SBufferInfo {
         VkBuffer handle = {};
         uint64 offset = 0;
         uint64 size = 0;
@@ -28,6 +33,11 @@ namespace am {
     struct SMemoryProperties {
         EMemoryProperty required = {};
         EMemoryProperty preferred = {};
+
+        AM_NODISCARD constexpr bool operator ==(const SMemoryProperties& other) const noexcept {
+            return prv::as_underlying(required) == prv::as_underlying(other.required) &&
+                   prv::as_underlying(preferred) == prv::as_underlying(other.preferred);
+        }
     };
 
     template <typename T>
@@ -37,10 +47,11 @@ namespace am {
         using BoxedType = T;
         struct SCreateInfo {
             EBufferUsage usage = {};
-            SMemoryProperties memory = {}; // Optional
+            SMemoryProperties memory = {};
             uint64 capacity = 0;
             bool staging = false;
             bool shared = false;
+            bool external = false;
         };
 
         ~CTypedBuffer() noexcept;
@@ -49,14 +60,19 @@ namespace am {
         AM_NODISCARD static std::vector<CRcPtr<Self>> make(const CRcPtr<CDevice>&, uint32, SCreateInfo&&) noexcept;
 
         AM_NODISCARD VkBuffer native() const noexcept;
+        AM_NODISCARD VkDeviceMemory memory() const noexcept;
         AM_NODISCARD VkBufferUsageFlags buffer_usage() const noexcept;
         AM_NODISCARD VkMemoryPropertyFlags memory_usage() const noexcept;
+        AM_NODISCARD uint64 alignment() const noexcept;
         AM_NODISCARD uint64 size() const noexcept;
         AM_NODISCARD uint64 capacity() const noexcept;
         AM_NODISCARD uint64 address() const noexcept;
+        AM_NODISCARD void* external_handle() const noexcept;
 
         AM_NODISCARD bool empty() const noexcept;
-        AM_NODISCARD STypedBufferInfo info(uint64 = 0) const noexcept;
+        AM_NODISCARD SBufferInfo info(uint64 = 0) const noexcept;
+        AM_NODISCARD uint64 alloc_size() const noexcept;
+        AM_NODISCARD uint64 alloc_offset() const noexcept;
         AM_NODISCARD uint64 size_bytes() const noexcept;
 
         AM_NODISCARD void* raw() noexcept;
@@ -70,7 +86,7 @@ namespace am {
 
         void insert(const T&) noexcept;
         void insert(uint64, const T&) noexcept;
-        void insert(const void*, uint64) noexcept;
+        void insert(const void*, uint64, uint64 = 0) noexcept;
         void insert(const std::vector<T>&) noexcept;
         void insert(uint64, const std::vector<T>&) noexcept;
 
@@ -87,18 +103,25 @@ namespace am {
         static void _native_make(Self*, SCreateInfo&& info) noexcept;
 
         VkBuffer _handle = {};
+        VkDeviceMemory _memory = {};
         VmaAllocation _allocation = {};
         VkBufferUsageFlags _buf_usage = {};
         VkMemoryPropertyFlags _mem_usage = {};
         void* _data = nullptr;
+        uint64 _alignment = 0;
+        uint64 _alloc_size = 0;
+        uint64 _alloc_offset = 0;
         uint64 _size = 0;
         uint64 _capacity = 0;
         uint64 _address = 0;
+        void* _external_handle = nullptr;
+        bool _shared = false;
+        bool _external = false;
 
         CRcPtr<CDevice> _device;
     };
 
-    constexpr auto memory_auto = SMemoryProperties();
+    constexpr auto memory_auto = SMemoryProperties{ (EMemoryProperty)0, (EMemoryProperty)0 };
 
     template <typename T>
     CTypedBuffer<T>::CTypedBuffer() noexcept = default;
@@ -107,13 +130,23 @@ namespace am {
     CTypedBuffer<T>::~CTypedBuffer() noexcept {
         AM_PROFILE_SCOPED();
         AM_LOG_INFO(_device->logger(), "deallocating buffer: {}", (const void*)_handle);
-        vmaDestroyBuffer(_device->allocator(), _handle, _allocation);
+        AM_UNLIKELY_IF(_external_handle) {
+#if _WIN64
+            CloseHandle(_external_handle);
+#endif
+        }
+        if (_external) {
+            vkFreeMemory(_device->native(), _memory, nullptr);
+            vkDestroyBuffer(_device->native(), _handle, nullptr);
+        } else {
+            vmaDestroyBuffer(_device->allocator(), _handle, _allocation);
+        }
     }
 
     template <typename T>
     AM_NODISCARD CRcPtr<CTypedBuffer<T>> CTypedBuffer<T>::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         result->_device = std::move(device);
         _native_make(result, std::move(info));
         return CRcPtr<Self>::make(result);
@@ -133,7 +166,7 @@ namespace am {
     template <typename T>
     void CTypedBuffer<T>::_native_make(Self* self, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        const auto* device = self->_device.get();
+        auto* device = self->_device.get();
         AM_LIKELY_IF(device->feature_support(EDeviceFeature::BufferDeviceAddress)) {
             info.usage |= EBufferUsage::ShaderDeviceAddress;
         }
@@ -147,7 +180,7 @@ namespace am {
         AM_LIKELY_IF(queue_families[0] != queue_families[1]) {
             queue_families_count++;
         }
-        AM_LIKELY_IF(queue_families[0] != queue_families[2] ||
+        AM_LIKELY_IF(queue_families[0] != queue_families[2] &&
                      queue_families[1] != queue_families[2]) {
             queue_families_count++;
         }
@@ -163,52 +196,118 @@ namespace am {
             buffer_info.pQueueFamilyIndices = queue_families;
         }
 
-        if (prv::as_underlying(info.usage & (EBufferUsage::VertexBuffer | EBufferUsage::IndexBuffer))) {
-            info.memory.required |= EMemoryProperty::DeviceLocal;
+        VkExternalMemoryBufferCreateInfo external_memory = {};
+        AM_UNLIKELY_IF(info.external) {
+            external_memory.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+            external_memory.handleTypes = external_memory_handle_type;
+            buffer_info.pNext = &external_memory;
         }
 
-        if (prv::as_underlying(info.usage & (EBufferUsage::UniformBuffer | EBufferUsage::StorageBuffer | EBufferUsage::IndirectBuffer))) {
-            info.memory.required |= EMemoryProperty::HostVisible | EMemoryProperty::HostCoherent;
-            info.memory.preferred |= EMemoryProperty::DeviceLocal;
-        }
+        AM_LIKELY_IF(info.memory == memory_auto) {
+            if (prv::as_underlying(info.usage & (EBufferUsage::VertexBuffer | EBufferUsage::IndexBuffer))) {
+                info.memory.required = EMemoryProperty::DeviceLocal;
+            }
 
-        if (info.staging) {
-            info.memory.required = EMemoryProperty::HostVisible;
-        }
+            if (prv::as_underlying(info.usage & (EBufferUsage::UniformBuffer | EBufferUsage::StorageBuffer | EBufferUsage::IndirectBuffer))) {
+                info.memory.required = EMemoryProperty::HostVisible | EMemoryProperty::HostCoherent;
+                info.memory.preferred = EMemoryProperty::DeviceLocal;
+            }
 
-        VmaAllocationCreateInfo allocation_info = {};
-        if (prv::as_underlying(info.memory.required & EMemoryProperty::HostVisible)) {
-            allocation_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
             if (info.staging) {
-                allocation_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            } else {
-                allocation_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+                info.memory.required = EMemoryProperty::HostVisible | EMemoryProperty::HostCoherent;
             }
         }
-        allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
-        allocation_info.requiredFlags = prv::as_vulkan(info.memory.required);
-        allocation_info.preferredFlags = prv::as_vulkan(info.memory.preferred);
-        allocation_info.memoryTypeBits = {};
-        allocation_info.pool = nullptr;
-        allocation_info.pUserData = nullptr;
-        allocation_info.priority = 1;
 
-        VmaAllocationInfo extra_info;
-        AM_VULKAN_CHECK(
-            device->logger(),
-            vmaCreateBuffer(
-                device->allocator(),
-                &buffer_info,
-                &allocation_info,
-                &self->_handle,
-                &self->_allocation,
-                &extra_info));
+        VmaAllocationInfo extra_info = {};
+        VkMemoryRequirements memory_requirements = {};
+        if (info.external) {
+            AM_VULKAN_CHECK(device->logger(), vkCreateBuffer(device->native(), &buffer_info, nullptr, &self->_handle));
+            vkGetBufferMemoryRequirements(device->native(), self->_handle, &memory_requirements);
+            memory_requirements.size = align_size(memory_requirements.size, memory_requirements.alignment);
+            const auto memory_index = device->memory_type_index(memory_requirements.memoryTypeBits, info.memory.required);
+            VkExportMemoryAllocateInfo export_allocate_info = {};
+#if _WIN64
+            VkExportMemoryWin32HandleInfoKHR win32_ext_mem_handle_info = {};
+            export_allocate_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+            export_allocate_info.handleTypes = external_memory_handle_type;
+            CWindowsSecurityAttributes security_attributes;
+            win32_ext_mem_handle_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+            win32_ext_mem_handle_info.pAttributes = security_attributes.get();
+            win32_ext_mem_handle_info.dwAccess = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
+            win32_ext_mem_handle_info.name = nullptr;
+            export_allocate_info.pNext = &win32_ext_mem_handle_info;
+#endif
+
+            VkMemoryAllocateFlagsInfo memory_allocate_flags = {};
+            memory_allocate_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+            memory_allocate_flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+            VkMemoryAllocateInfo memory_allocate_info = {};
+            memory_allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            memory_allocate_info.pNext = &export_allocate_info;
+            memory_allocate_info.allocationSize = memory_requirements.size;
+            memory_allocate_info.memoryTypeIndex = memory_index;
+            if (buffer_info.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+                memory_allocate_info.pNext = &memory_allocate_flags;
+                memory_allocate_flags.pNext = &export_allocate_info;
+            }
+            AM_VULKAN_CHECK(device->logger(), vkAllocateMemory(device->native(), &memory_allocate_info, nullptr, &self->_memory));
+            AM_VULKAN_CHECK(device->logger(), vkBindBufferMemory(device->native(), self->_handle, self->_memory, 0));
+            self->_alloc_size = memory_requirements.size;
+            self->_alloc_offset = 0;
+            self->_capacity = memory_requirements.size;
+            self->_data = nullptr;
+            self->_mem_usage = prv::as_vulkan(info.memory.required);
+        } else {
+            VmaAllocationCreateInfo allocation_info = {};
+            AM_LIKELY_IF(prv::as_underlying(info.memory.required & EMemoryProperty::HostVisible)) {
+                info.memory.required |= EMemoryProperty::HostCached;
+                allocation_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+            }
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation_info.requiredFlags = prv::as_vulkan(info.memory.required);
+            allocation_info.preferredFlags = prv::as_vulkan(info.memory.preferred);
+            allocation_info.memoryTypeBits = {};
+            AM_VULKAN_CHECK(
+                device->logger(),
+                vmaCreateBuffer(
+                    device->allocator(),
+                    &buffer_info,
+                    &allocation_info,
+                    &self->_handle,
+                    &self->_allocation,
+                    &extra_info));
+            self->_memory = extra_info.deviceMemory;
+            self->_alloc_size = extra_info.size;
+            self->_alloc_offset = extra_info.offset;
+            self->_capacity = info.capacity;
+            self->_data = extra_info.pMappedData;
+            vmaGetMemoryTypeProperties(device->allocator(), extra_info.memoryType, &self->_mem_usage);
+        }
         AM_LOG_INFO(device->logger(), "allocating CTypedBuffer<T>({}), size: {} bytes, address: {}",
                     (const void*)self->_handle, buffer_info.size, (const void*)extra_info.pMappedData);
+        vkGetBufferMemoryRequirements(device->native(), self->_handle, &memory_requirements);
         self->_buf_usage = buffer_info.usage;
-        vmaGetMemoryTypeProperties(device->allocator(), extra_info.memoryType, &self->_mem_usage);
-        self->_data = extra_info.pMappedData;
-        self->_capacity = info.capacity;
+        self->_shared = info.shared;
+        self->_external = info.external;
+        self->_alignment = memory_requirements.alignment;
+        if (info.external) {
+#if _WIN64
+            VkMemoryGetWin32HandleInfoKHR memory_handle_info = {};
+            memory_handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
+            memory_handle_info.memory = self->_memory;
+            memory_handle_info.handleType = external_memory_handle_type;
+            AM_VULKAN_CHECK(device->logger(), vkGetMemoryWin32HandleKHR(device->native(), &memory_handle_info, &self->_external_handle));
+#else
+            int handle_fd = -1;
+            VkMemoryGetFdInfoKHR memory_handle_info = {};
+            memory_handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+            memory_handle_info.memory = self->_memory;
+            memory_handle_info.handleType = external_memory_handle_type;
+            AM_VULKAN_CHECK(device->logger(), vkGetMemoryFdKHR(device->native(), &memory_handle_info, &handle_fd));
+            self->_external_handle = (void*)(uint64)handle_fd;
+#endif
+        }
+
         AM_LIKELY_IF(device->feature_support(EDeviceFeature::BufferDeviceAddress)) {
             VkBufferDeviceAddressInfo device_address_info = {};
             device_address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
@@ -224,6 +323,12 @@ namespace am {
     }
 
     template <typename T>
+    AM_NODISCARD VkDeviceMemory CTypedBuffer<T>::memory() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _memory;
+    }
+
+    template <typename T>
     AM_NODISCARD VkBufferUsageFlags CTypedBuffer<T>::buffer_usage() const noexcept {
         AM_PROFILE_SCOPED();
         return _buf_usage;
@@ -233,6 +338,12 @@ namespace am {
     AM_NODISCARD VkMemoryPropertyFlags CTypedBuffer<T>::memory_usage() const noexcept {
         AM_PROFILE_SCOPED();
         return _mem_usage;
+    }
+
+    template <typename T>
+    AM_NODISCARD uint64 CTypedBuffer<T>::alignment() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _alignment;
     }
 
     template <typename T>
@@ -254,20 +365,38 @@ namespace am {
     }
 
     template <typename T>
+    AM_NODISCARD void* CTypedBuffer<T>::external_handle() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _external_handle;
+    }
+
+    template <typename T>
     AM_NODISCARD bool CTypedBuffer<T>::empty() const noexcept {
         AM_PROFILE_SCOPED();
         return _size == 0;
     }
 
     template <typename T>
-    AM_NODISCARD STypedBufferInfo CTypedBuffer<T>::info(uint64 offset) const noexcept {
+    AM_NODISCARD SBufferInfo CTypedBuffer<T>::info(uint64 offset) const noexcept {
         AM_PROFILE_SCOPED();
         const auto size = size_bytes();
         return {
             _handle,
-            offset,
-            size == 0 ? 4 : size
+            offset * sizeof(T),
+            size == 0 ? 1 : size
         };
+    }
+
+    template <typename T>
+    AM_NODISCARD uint64 CTypedBuffer<T>::alloc_size() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _alloc_size;
+    }
+
+    template <typename T>
+    AM_NODISCARD uint64 CTypedBuffer<T>::alloc_offset() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _alloc_offset;
     }
 
     template <typename T>
@@ -303,13 +432,13 @@ namespace am {
     template <typename T>
     AM_NODISCARD T& CTypedBuffer<T>::operator [](uint64 index) noexcept {
         AM_PROFILE_SCOPED();
-        return *std::launder(data())[index];
+        return data()[index];
     }
 
     template <typename T>
     AM_NODISCARD const T& CTypedBuffer<T>::operator [](uint64 index) const noexcept {
         AM_PROFILE_SCOPED();
-        return *std::launder(data())[index];
+        return data()[index];
     }
 
     template <typename T>
@@ -329,13 +458,13 @@ namespace am {
     }
 
     template <typename T>
-    void CTypedBuffer<T>::insert(const void* ptr, uint64 bytes) noexcept {
+    void CTypedBuffer<T>::insert(const void* ptr, uint64 bytes, uint64 offset) noexcept {
         AM_PROFILE_SCOPED();
         const auto size = bytes / sizeof(T);
         AM_UNLIKELY_IF(size > _capacity) {
             reallocate(std::max(_capacity * 2, size));
         }
-        std::memcpy(_data, ptr, bytes);
+        std::memcpy(data() + offset, ptr, bytes);
         _size = size;
     }
 
@@ -393,13 +522,11 @@ namespace am {
         auto old_buffer = _handle;
         auto old_allocation = _allocation;
         _native_make(this, {
-            .usage = static_cast<EBufferUsage>(buffer_usage()),
-            .memory = {
-                .required = static_cast<EMemoryProperty>(memory_usage()),
-                .preferred = {}
-            },
-            .capacity = capacity,
-            .staging = false,
+            static_cast<EBufferUsage>(buffer_usage()),
+            { static_cast<EMemoryProperty>(memory_usage()) },
+            capacity,
+            false,
+            _shared
         });
         _capacity = capacity;
         _size = std::min(_size, _capacity);

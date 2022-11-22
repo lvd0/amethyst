@@ -1,0 +1,201 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "common.glsl"
+
+layout (local_size_x = 256) in;
+
+layout (set = 0, binding = 0, scalar)
+buffer readonly BObjectData {
+    SObjectData[] objects;
+};
+
+layout (set = 0, binding = 1, scalar)
+uniform UCamera {
+    SCameraData camera;
+    SCameraData prev_camera;
+};
+
+layout (set = 0, binding = 2)
+buffer readonly BLocalTransforms {
+    STransformData[] local_transforms;
+};
+
+layout (set = 0, binding = 3)
+buffer readonly BWorldTransforms {
+    STransformData[] world_transforms;
+};
+
+layout (set = 0, binding = 4, scalar)
+buffer readonly BObjectOffsets {
+    uint[] object_offsets;
+};
+
+layout (set = 0, binding = 5, scalar)
+buffer writeonly BDrawCountOutput {
+    uint[] draw_count;
+};
+
+layout (set = 0, binding = 6, scalar)
+buffer BCullingOutput {
+    SGLSLDrawCommandIndirect[] draw_commands;
+};
+
+layout (set = 0, binding = 7, scalar)
+buffer writeonly BObjectIDRemap {
+    uint[] object_id_remap;
+};
+
+layout (set = 0, binding = 8, scalar)
+buffer readonly BInstanceOffsets {
+    uint[] instance_offsets;
+};
+
+layout (set = 0, binding = 9, scalar)
+buffer writeonly BInstanceIDRemap {
+    uint[] instance_id_remap;
+};
+
+layout (set = 0, binding = 10) uniform sampler2D u_depth_pyramid;
+
+layout (push_constant)
+uniform Constants {
+    uint draw_count_size;
+    uint frustum_cull;
+    uint occluded_cull;
+};
+
+float signed_distance(in vec4 plane, in vec3 point) {
+    return dot(plane.xyz, point) - plane.w;
+}
+
+bool check_plane(in vec4 plane, in vec4[2] aabb) {
+    const float radius =
+        aabb[1].x * abs(plane.x) +
+        aabb[1].y * abs(plane.y) +
+        aabb[1].z * abs(plane.z);
+    return signed_distance(plane, aabb[0].xyz) >= -radius;
+}
+
+bool check_frustum(in vec4[6] frustum, in mat4 model, in SAABB aabb) {
+    const vec3 global_center = vec3(model * vec4(aabb.center.xyz, 1.0));
+    const vec3 right = vec3(model[0]) * aabb.extents.x;
+    const vec3 up = vec3(model[1]) * aabb.extents.y;
+    const vec3 forward = vec3(-model[2]) * aabb.extents.z;
+
+    const vec3 new_half_ext = vec3(
+        abs(dot(vec3(1, 0, 0), right)) +
+        abs(dot(vec3(1, 0, 0), up)) +
+        abs(dot(vec3(1, 0, 0), forward)),
+
+        abs(dot(vec3(0, 1, 0), right)) +
+        abs(dot(vec3(0, 1, 0), up)) +
+        abs(dot(vec3(0, 1, 0), forward)),
+
+        abs(dot(vec3(0, 0, 1), right)) +
+        abs(dot(vec3(0, 0, 1), up)) +
+        abs(dot(vec3(0, 0, 1), forward)));
+
+    vec4[] global_aabb = vec4[](vec4(global_center, 1.0), vec4(new_half_ext, 1.0));
+    return
+        check_plane(frustum[0], global_aabb) &&
+        check_plane(frustum[1], global_aabb) &&
+        check_plane(frustum[2], global_aabb) &&
+        check_plane(frustum[3], global_aabb) &&
+        check_plane(frustum[4], global_aabb) &&
+        check_plane(frustum[5], global_aabb);
+}
+
+bool check_depth_pyramid(in mat4 model, in SAABB aabb) {
+    const vec3 box_size = vec3(aabb.max - aabb.min);
+    const vec3[] corners = vec3[](
+        aabb.min.xyz,
+        aabb.min.xyz + vec3(box_size.x, 0, 0),
+        aabb.min.xyz + vec3(0, box_size.y, 0),
+        aabb.min.xyz + vec3(0, 0, box_size.z),
+        aabb.min.xyz + vec3(box_size.xy, 0),
+        aabb.min.xyz + vec3(0, box_size.yz),
+        aabb.min.xyz + vec3(box_size.x, 0, box_size.z),
+        aabb.min.xyz + box_size);
+    float min_z = 1;
+    vec2 min_xy = vec2(1);
+    vec2 max_xy = vec2(0);
+    [[unroll]]
+    for (int i = 0; i < 8; ++i) {
+        vec4 clip_pos = camera.proj_view * model * vec4(corners[i], 1);
+        clip_pos.z = max(clip_pos.z, 0);
+        clip_pos.xyz /= clip_pos.w;
+        clip_pos.xy = clamp(clip_pos.xy, -1, 1) * vec2(0.5, -0.5) + vec2(0.5);
+        min_xy = min(clip_pos.xy, min_xy);
+        max_xy = max(clip_pos.xy, max_xy);
+        min_z = clamp(min(clip_pos.z, min_z), 0, 1);
+    }
+
+    const vec4 box_uvs = vec4(min_xy, max_xy);
+    const ivec2 resolution = textureSize(u_depth_pyramid, 0).xy;
+    const ivec2 size = ivec2((max_xy - min_xy) * resolution.xy);
+    const float max_mip = floor(log2(max(resolution.x, resolution.y)));
+    float mip = clamp(ceil(log2(max(size.x, size.y))), 0, max_mip);
+
+    const float lower_level = max(mip - 1, 0);
+    const vec2 scale = vec2(exp2(-lower_level));
+    const vec2 dimensions = ceil(box_uvs.zw * scale) - floor(box_uvs.xy * scale);
+    if (dimensions.x <= 2 && dimensions.y <= 2) {
+        mip = lower_level;
+    }
+    const vec4 depth = vec4(
+        textureLod(u_depth_pyramid, box_uvs.xy, mip).r,
+        textureLod(u_depth_pyramid, box_uvs.zy, mip).r,
+        textureLod(u_depth_pyramid, box_uvs.xw, mip).r,
+        textureLod(u_depth_pyramid, box_uvs.zw, mip).r);
+    const float max_depth = max(max(max(depth.x, depth.y), depth.z), depth.w);
+    return min_z < max_depth;
+}
+
+bool is_visible(in SObjectData object, in uint instance_id) {
+    const mat4 local_transform = local_transforms[object.transform_index[0]].current;
+    const mat4 world_transform = world_transforms[object.transform_index[1] + instance_id].current;
+    const mat4 model = world_transform * local_transform;
+    bool visible = frustum_cull == 0 || check_frustum(camera.frustum, model, object.aabb);
+    if (visible && occluded_cull == 1) {
+        visible = check_depth_pyramid(model, object.aabb);
+    }
+    return visible;
+}
+
+SGLSLDrawCommandIndirect build_command(in SObjectData object) {
+    SGLSLDrawCommandIndirect indirect_data = object.indirect_data;
+    indirect_data.instances = 1;
+    return indirect_data;
+}
+
+void main() {
+    if (gl_GlobalInvocationID.x == 0) {
+        for (uint i = 0; i < draw_count_size; ++i) {
+            atomicExchange(draw_count[i], 0);
+        }
+    }
+    barrier();
+    if (gl_GlobalInvocationID.x < objects.length()) {
+        const SObjectData object = objects[gl_GlobalInvocationID.x];
+        uint slot = -1;
+        uint instance = 0;
+        for (uint i = 0; i < object.indirect_data.instances; ++i) {
+            if (is_visible(object, i)) {
+                const uint indirect_offset = object.indirect_offset;
+                if (slot == -1) {
+                    slot = atomicAdd(draw_count[indirect_offset], 1);
+                    draw_commands[slot + object_offsets[indirect_offset]] = build_command(object);
+                    object_id_remap[slot + object_offsets[indirect_offset]] = gl_GlobalInvocationID.x;
+                } else {
+                    draw_commands[slot + object_offsets[indirect_offset]].instances += 1;
+                }
+                instance_id_remap[instance + instance_offsets[gl_GlobalInvocationID.x]] = i;
+                instance++;
+            }
+        }
+    }
+}

@@ -20,7 +20,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CContext> CContext::make(SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         auto logger = spdlog::stdout_color_mt("context");
         result->_logger = logger;
         { // Instance
@@ -80,6 +80,7 @@ namespace am {
             validation_info.pNext = nullptr;
             validation_info.flags = {};
             validation_info.messageSeverity =
+                VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
             validation_info.messageType =
@@ -122,8 +123,10 @@ namespace am {
                     default: AM_UNREACHABLE();
                 }
 
+    #if defined(AM_DEBUG) || defined(AM_DEBUG_LOGGING)
                 logger->log(level, "[{}]: {}", type_string, data->pMessage);
                 logger->flush();
+    #endif
                 const auto fatal_bits = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
                 AM_UNLIKELY_IF(severity & fatal_bits) {
                     AM_ASSERT(false, "fatal vulkan error");

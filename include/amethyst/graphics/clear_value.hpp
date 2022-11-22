@@ -27,31 +27,31 @@ namespace am {
     public:
         using Self = CClearValue;
 
-        constexpr ~CClearValue() noexcept;
+        AM_CONSTEXPR ~CClearValue() noexcept;
 
-        AM_NODISCARD constexpr static Self make() noexcept;
-        AM_NODISCARD constexpr static Self make(SClearColor&&) noexcept;
-        AM_NODISCARD constexpr static Self make(SClearDepth&&) noexcept;
+        AM_NODISCARD AM_CONSTEXPR static Self make() noexcept;
+        AM_NODISCARD AM_CONSTEXPR static Self make(SClearColor&&) noexcept;
+        AM_NODISCARD AM_CONSTEXPR static Self make(SClearDepth&&) noexcept;
 
-        AM_NODISCARD constexpr VkClearValue native() const noexcept;
-        AM_NODISCARD constexpr EClearValueType type() const noexcept;
+        AM_NODISCARD AM_CONSTEXPR VkClearValue native() const noexcept;
+        AM_NODISCARD AM_CONSTEXPR EClearValueType type() const noexcept;
 
     private:
-        constexpr CClearValue() noexcept;
+        AM_CONSTEXPR CClearValue() noexcept;
 
         VkClearValue _clear = {};
         EClearValueType _type = {};
     };
 
-    constexpr CClearValue::~CClearValue() noexcept = default;
+    AM_CONSTEXPR CClearValue::~CClearValue() noexcept = default;
 
-    constexpr CClearValue::CClearValue() noexcept = default;
+    AM_CONSTEXPR CClearValue::CClearValue() noexcept = default;
 
-    AM_NODISCARD constexpr CClearValue CClearValue::make() noexcept {
+    AM_NODISCARD AM_CONSTEXPR CClearValue CClearValue::make() noexcept {
         return {};
     }
 
-    AM_NODISCARD constexpr CClearValue CClearValue::make(SClearColor&& value) noexcept {
+    AM_NODISCARD AM_CONSTEXPR CClearValue CClearValue::make(SClearColor&& value) noexcept {
         Self result;
         result._clear.color = { {
             value.f32[0],
@@ -63,18 +63,18 @@ namespace am {
         return result;
     }
 
-    AM_NODISCARD constexpr CClearValue CClearValue::make(SClearDepth&& value) noexcept {
+    AM_NODISCARD AM_CONSTEXPR CClearValue CClearValue::make(SClearDepth&& value) noexcept {
         Self result;
         result._clear.depthStencil = { value.depth, value.stencil };
         result._type = EClearValueType::Depth;
         return result;
     }
 
-    AM_NODISCARD constexpr VkClearValue CClearValue::native() const noexcept {
+    AM_NODISCARD AM_CONSTEXPR VkClearValue CClearValue::native() const noexcept {
         return _clear;
     }
 
-    AM_NODISCARD constexpr EClearValueType CClearValue::type() const noexcept {
+    AM_NODISCARD AM_CONSTEXPR EClearValueType CClearValue::type() const noexcept {
         return _type;
     }
 } // namespace am

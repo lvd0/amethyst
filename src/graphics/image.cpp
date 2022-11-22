@@ -15,12 +15,18 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CImage> CImage::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
-        const auto aspect = prv::deduce_aspect(prv::as_vulkan(info.format));
+        auto* result = new Self();
+        const auto aspect = prv::deduce_aspect(prv::as_vulkan(info.format.internal));
+        if (info.format.view == EResourceFormat::Undefined) {
+            info.format.view = info.format.internal;
+        }
         result->_samples = prv::as_vulkan(info.samples);
         result->_aspect = aspect;
         result->_usage = prv::as_vulkan(info.usage);
-        result->_format = prv::as_vulkan(info.format);
+        result->_format = {
+            prv::as_vulkan(info.format.internal),
+            prv::as_vulkan(info.format.view)
+        };
         result->_layers = info.layers;
         result->_mips = info.mips;
         result->_width = info.width;
@@ -41,8 +47,11 @@ namespace am {
         }
         VkImageCreateInfo image_info = {};
         image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        if (info.format.internal != info.format.view) {
+            image_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
         image_info.imageType = VK_IMAGE_TYPE_2D;
-        image_info.format = prv::as_vulkan(info.format);
+        image_info.format = prv::as_vulkan(info.format.internal);
         image_info.extent = { info.width, info.height, 1 };
         image_info.mipLevels = info.mips;
         image_info.arrayLayers = info.layers;
@@ -77,7 +86,7 @@ namespace am {
             info.layers == 1 ?
                 VK_IMAGE_VIEW_TYPE_2D :
                 VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        image_view_info.format = prv::as_vulkan(info.format);
+        image_view_info.format = prv::as_vulkan(info.format.view);
         image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
         image_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
         image_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -101,7 +110,10 @@ namespace am {
         result->_usage = info.usage;
         result->_samples = info.samples;
         result->_aspect = info.aspect;
-        result->_format = info.format;
+        result->_format = {
+            info.format.internal,
+            info.format.view,
+        };
         result->_layers = info.layers;
         result->_mips = info.mips;
         result->_width = info.width;
@@ -134,8 +146,14 @@ namespace am {
         return _aspect;
     }
 
-    AM_NODISCARD VkFormat CImage::format() const noexcept {
-        return _format;
+    AM_NODISCARD VkFormat CImage::internal_format() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _format._internal;
+    }
+
+    AM_NODISCARD VkFormat CImage::view_format() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _format._view;
     }
 
     AM_NODISCARD uint32 CImage::width() const noexcept {
@@ -156,5 +174,74 @@ namespace am {
     AM_NODISCARD uint32 CImage::mips() const noexcept {
         AM_PROFILE_SCOPED();
         return _mips;
+    }
+
+    CImageView::CImageView() noexcept = default;
+
+    CImageView::~CImageView() noexcept {
+        AM_PROFILE_SCOPED();
+        AM_LIKELY_IF(_owning) {
+            vkDestroyImageView(_device->native(), _handle, nullptr);
+        }
+    }
+
+    AM_NODISCARD CRcPtr<CImageView> CImageView::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
+        AM_PROFILE_SCOPED();
+        auto result = new Self();
+        if (info.format == EResourceFormat::Undefined) {
+            info.format = (EResourceFormat)info.image->view_format();
+        }
+        VkImageViewCreateInfo image_view_info = {};
+        image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        image_view_info.image = info.image->native();
+        image_view_info.viewType =
+            info.image->layers() == 1 ?
+                VK_IMAGE_VIEW_TYPE_2D :
+                VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        image_view_info.format = prv::as_vulkan(info.format);
+        image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        image_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        image_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        image_view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        image_view_info.subresourceRange.aspectMask = info.image->aspect();
+        if (info.mip == all_mips) {
+            image_view_info.subresourceRange.baseMipLevel = 0;
+            image_view_info.subresourceRange.levelCount = info.image->mips();
+        } else {
+            image_view_info.subresourceRange.baseMipLevel = info.mip;
+            image_view_info.subresourceRange.levelCount = 1;
+        }
+        if (info.layer == all_layers) {
+            image_view_info.subresourceRange.baseArrayLayer = 0;
+            image_view_info.subresourceRange.layerCount = info.image->layers();
+        } else {
+            image_view_info.subresourceRange.baseArrayLayer = info.layer;
+            image_view_info.subresourceRange.layerCount = 1;
+        }
+
+        AM_VULKAN_CHECK(device->logger(), vkCreateImageView(device->native(), &image_view_info, nullptr, &result->_handle));
+        result->_owning = true;
+        result->_device = std::move(device);
+        result->_image = std::move(info.image);
+        return CRcPtr<Self>::make(result);
+    }
+
+    CRcPtr<CImageView> CImageView::from_image(const CImage* image) noexcept {
+        AM_PROFILE_SCOPED();
+        auto result = new Self();
+        result->_handle = image->view();
+        result->_owning = false;
+        result->_image = CRcPtr<const CImage>::make(image);
+        return CRcPtr<CImageView>::make(result);
+    }
+
+    AM_NODISCARD VkImageView CImageView::native() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _handle;
+    }
+
+    AM_NODISCARD const CImage* CImageView::image() const noexcept {
+        AM_PROFILE_SCOPED();
+        return _image.get();
     }
 } // namespace am

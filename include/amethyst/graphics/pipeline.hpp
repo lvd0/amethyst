@@ -85,7 +85,7 @@ namespace am {
         AM_NODISCARD EPipelineType type() const noexcept;
         AM_NODISCARD VkPipelineLayout main_layout() const noexcept;
         AM_NODISCARD SDescriptorSetLayout set_layout(uint32) const noexcept;
-        AM_NODISCARD const SDescriptorBinding& bindings(const std::string&) const noexcept;
+        AM_NODISCARD const SDescriptorBinding* bindings(const std::string&) const noexcept;
 
     private:
         CPipeline() noexcept;

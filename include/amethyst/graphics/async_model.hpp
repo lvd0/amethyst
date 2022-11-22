@@ -20,13 +20,26 @@
 #include <vector>
 
 namespace am {
+    struct SAABB {
+        glm::vec3 center = {};
+        glm::vec3 extents = {};
+        glm::vec3 min = {};
+        glm::vec3 max = {};
+    };
+
+    struct SMaterial {
+        glm::vec4 base_color = {};
+    };
+
     struct STexturedMesh {
         CRcPtr<CAsyncMesh> geometry;
         CRcPtr<CAsyncTexture> albedo;
         CRcPtr<CAsyncTexture> normal;
+        SMaterial material = {};
         uint32 vertices = 0;
         uint32 indices = 0;
         glm::mat4 transform = {};
+        SAABB aabb = {};
     };
 
     class AM_MODULE CAsyncModel : public IRefCounted {

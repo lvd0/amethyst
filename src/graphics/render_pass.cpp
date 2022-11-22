@@ -9,17 +9,18 @@ namespace am {
 
     CRenderPass::~CRenderPass() noexcept {
         AM_PROFILE_SCOPED();
+        AM_LOG_INFO(_device->logger(), "destroying render pass: {}", (const void*)_handle);
         vkDestroyRenderPass(_device->native(), _handle, nullptr);
     }
 
     AM_NODISCARD CRcPtr<CRenderPass> CRenderPass::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
         AM_LOG_INFO(device->logger(), "building render pass");
-        auto result = new Self();
+        auto* result = new Self();
         std::vector<VkAttachmentDescription> attachment_descriptions;
         attachment_descriptions.reserve(info.attachments.size());
         for (const auto& each : info.attachments) {
-            const auto is_stencil = prv::deduce_aspect(prv::as_vulkan(each.format)) & VK_IMAGE_ASPECT_STENCIL_BIT;
+            const auto is_stencil = prv::deduce_aspect(prv::as_vulkan(each.format.internal)) & VK_IMAGE_ASPECT_STENCIL_BIT;
             const auto is_depth = each.clear.type() == EClearValueType::Depth;
             const auto color_load =
                 each.clear.type() == EClearValueType::None ?
@@ -38,7 +39,10 @@ namespace am {
                     VK_ATTACHMENT_STORE_OP_DONT_CARE :
                     VK_ATTACHMENT_STORE_OP_STORE;
             VkAttachmentDescription description = {};
-            description.format = prv::as_vulkan(each.format);
+            description.format = prv::as_vulkan(
+                each.format.view == EResourceFormat::Undefined ?
+                    each.format.internal :
+                    each.format.view);
             description.samples = prv::as_vulkan(each.samples);
             description.loadOp = color_load;
             description.storeOp = color_store;

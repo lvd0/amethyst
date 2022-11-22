@@ -41,7 +41,7 @@ namespace am {
         constexpr CExpected(E&&) noexcept;
         template <typename... Args>
         constexpr CExpected(Args&&...) noexcept;
-        constexpr ~CExpected() noexcept;
+        AM_CONSTEXPR ~CExpected() noexcept;
         AM_QUALIFIED_DECLARE_COPY(CExpected, constexpr);
         AM_QUALIFIED_DECLARE_MOVE(CExpected, constexpr);
 
@@ -91,7 +91,7 @@ namespace am {
     }
 
     template <typename T, typename E>
-    constexpr CExpected<T, E>::~CExpected() noexcept {
+    AM_CONSTEXPR CExpected<T, E>::~CExpected() noexcept {
         _destroy();
     }
 
@@ -103,6 +103,7 @@ namespace am {
     template <typename T, typename E>
     constexpr CExpected<T, E>& CExpected<T, E>::operator =(const CExpected& other) noexcept {
         AM_UNLIKELY_IF(this != &other) {
+            _destroy();
             switch (_tag) {
                 case tag_value:
                     new (&_storage) T(other.value());

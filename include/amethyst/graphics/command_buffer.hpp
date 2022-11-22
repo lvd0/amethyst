@@ -26,7 +26,7 @@ namespace am {
     };
 
     struct SBufferMemoryBarrier {
-        STypedBufferInfo buffer = {};
+        SBufferInfo buffer = {};
         EPipelineStage source_stage = {};
         EPipelineStage dest_stage = {};
         EResourceAccess source_access = {};
@@ -78,32 +78,37 @@ namespace am {
         AM_NODISCARD VkCommandPool pool() const noexcept;
 
         Self& begin() noexcept;
-        Self& begin_render_pass(const CFramebuffer*) noexcept;
+        Self& begin_render_pass(const CFramebuffer*, const CRenderPass* = nullptr) noexcept;
         Self& bind_pipeline(const CPipeline*) noexcept;
         Self& set_viewport() noexcept;
         Self& set_viewport(SInvertedViewportTag) noexcept;
         Self& set_scissor() noexcept;
         Self& bind_descriptor_set(const CDescriptorSet*) noexcept;
-        Self& bind_vertex_buffer(const STypedBufferInfo&) noexcept;
-        Self& bind_index_buffer(const STypedBufferInfo&) noexcept;
+        Self& bind_vertex_buffer(const SBufferInfo&) noexcept;
+        Self& bind_index_buffer(const SBufferInfo&) noexcept;
+        Self& bind_mesh(const CAsyncMesh*) noexcept;
         Self& push_constants(EShaderStage, const void*, uint32) noexcept;
         Self& draw(uint32, uint32, uint32, uint32) noexcept;
         Self& draw_indexed(uint32, uint32, uint32, int32, uint32) noexcept;
-        Self& draw_indirect(const STypedBufferInfo&) noexcept;
-        Self& draw_indexed_indirect(const STypedBufferInfo&) noexcept;
+        Self& draw_indirect(const SBufferInfo&, uint32) noexcept;
+        Self& draw_indexed_indirect(const SBufferInfo&, uint32) noexcept;
+        Self& draw_indexed_indirect_count(const SBufferInfo&, const SBufferInfo&, uint32) noexcept;
         Self& end_render_pass() noexcept;
         Self& dispatch(uint32 = 1, uint32 = 1, uint32 = 1) noexcept;
-        Self& copy_buffer(const STypedBufferInfo&, const STypedBufferInfo&) noexcept;
-        Self& copy_buffer_to_image(const STypedBufferInfo&, const CImage*, uint32 = 0) noexcept;
+        Self& copy_buffer(const SBufferInfo&, const SBufferInfo&) noexcept;
+        Self& copy_buffer_to_image(const SBufferInfo&, const CImage*, uint32 = 0) noexcept;
         Self& barrier(const SBufferMemoryBarrier&) noexcept;
         Self& barrier(const SImageMemoryBarrier&) noexcept;
         Self& barrier(EPipelineStage, EPipelineStage) noexcept;
         Self& memory_barrier(const SMemoryBarrier&) noexcept;
         Self& copy_image(const CImage*, const CImage*) noexcept;
+        Self& clear_image(const CImage*, CClearValue&&) noexcept;
         Self& transfer_ownership(const CQueue&, const CQueue&, const SBufferMemoryBarrier&) noexcept;
         Self& transfer_ownership(const CQueue&, const CQueue&, const SImageMemoryBarrier&) noexcept;
         Self& transition_layout(const SImageMemoryBarrier&) noexcept;
         Self& set_checkpoint(const char*) noexcept;
+        Self& begin_query(const CQueryPool*, uint32 = 0) noexcept;
+        Self& end_query(const CQueryPool*, uint32 = 0) noexcept;
         Self& end() noexcept;
 
     private:

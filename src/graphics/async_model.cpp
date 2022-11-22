@@ -14,8 +14,10 @@
 
 #include <cgltf.h>
 
+#include <limits>
 #include <vector>
 #include <queue>
+#include <cmath>
 #include <map>
 
 namespace am {
@@ -45,11 +47,27 @@ namespace am {
                 AM_PROFILE_SCOPED();
                 auto gltf = CFileView::make(path);
                 cgltf_options options = {};
-                options.memory.alloc_func = [](void*, std::size_t size) noexcept {
+                options.memory.alloc_func = [](void*, cgltf_size size) noexcept {
                     return operator new[](size);
                 };
                 options.memory.free_func = [](void*, void* ptr) noexcept {
                     return operator delete[](ptr);
+                };
+                options.file.read = [](const struct cgltf_memory_options* mem,
+                                       const struct cgltf_file_options*,
+                                       const char* path,
+                                       cgltf_size* size,
+                                       void** data) {
+                    auto file = am::CFileView::make(path);
+                    *size = file->size();
+                    *data = mem->alloc_func(nullptr, *size);
+                    std::memcpy(*data, file->data(), *size);
+                    return cgltf_result_success;
+                };
+                options.file.release = [](const struct cgltf_memory_options* mem,
+                                          const struct cgltf_file_options*,
+                                          void* data) {
+                    mem->free_func(nullptr, data);
                 };
                 cgltf_data* model = nullptr;
                 {
@@ -58,26 +76,9 @@ namespace am {
                     AM_ASSERT(cgltf_parse(&options, gltf->data(), gltf->size(), &model) == cgltf_result_success, "failed to parse model");
                 }
                 gltf.value().reset();
-                const auto base_path = path.parent_path();
-                std::vector<CRcPtr<CFileView>> buffer_handles;
-                std::map<const char*, const void*> buffers;
-                for (uint32 i = 0; i < model->buffers_count; ++i) {
-                    const auto& buffer = model->buffers[i];
-                    AM_UNLIKELY_IF(!buffers.contains(buffer.uri)) {
-                        const auto str_uri = std::string_view(buffer.uri);
-                        auto base64_pos = str_uri.find("base64");
-                        AM_UNLIKELY_IF(base64_pos != std::string::npos) {
-                            void* out_data = nullptr;
-                            cgltf_load_buffer_base64(&options, buffer.size, str_uri.data() + base64_pos + 7, &out_data);
-                            buffers[buffer.uri] = out_data;
-                            continue;
-                        }
-                        auto file = CFileView::make(base_path / buffer.uri).value(); // TODO: Maybe check?
-                        buffers[buffer.uri] = file->data();
-                        buffer_handles.emplace_back(std::move(file));
-                    }
-                }
+                cgltf_load_buffers(&options, model, path.generic_string().c_str());
 
+                const auto base_path = path.parent_path();
                 std::map<const char*, CRcPtr<CAsyncTexture>> textures;
                 const auto import_texture = [&](const cgltf_texture* texture, ETextureType type) noexcept {
                     AM_LIKELY_IF(texture && !textures.contains(texture->image->uri)) {
@@ -105,7 +106,7 @@ namespace am {
                         nodes.pop();
                         device->context()->scheduler()->AddTaskSetToPipe(subtasks.emplace_back(std::make_unique<enki::TaskSet>(
                             1,
-                            [node, result, device, &guard, &buffers, &textures](enki::TaskSetPartition, uint32) {
+                            [node, result, device, &guard, &textures](enki::TaskSetPartition, uint32) {
                                 AM_LIKELY_IF(!node->mesh) {
                                     return;
                                 }
@@ -121,7 +122,7 @@ namespace am {
                                         const auto& attribute = primitive.attributes[k];
                                         const auto* accessor = attribute.data;
                                         const auto* buf_view = accessor->buffer_view;
-                                        const auto* data_ptr = (const char*)buffers[buf_view->buffer->uri];
+                                        const auto* data_ptr = (const char*)buf_view->buffer->data;
                                         switch (attribute.type) {
                                             case cgltf_attribute_type_position:
                                                 AM_ASSERT(accessor->type == cgltf_type_vec3, "position must be a vec3");
@@ -154,9 +155,11 @@ namespace am {
                                         vertex_count * 3 +
                                         vertex_count * 2 +
                                         vertex_count * 4);
+                                    auto min_aabb = glm::vec3(std::numeric_limits<float32>::max());
+                                    auto max_aabb = glm::vec3(std::numeric_limits<float32>::min());
                                     {
                                         auto* ptr = vertices.data();
-                                        for (uint32 v = 0; v < vertex_count; ++v, ptr += 12) {
+                                        for (uint32 v = 0; v < vertex_count; ++v, ptr += prv::vertex_components) {
                                             prv::SVertex vertex = {};
                                             AM_LIKELY_IF(position_ptr) {
                                                 std::memcpy(&vertex.position, position_ptr + v, sizeof(glm::vec3));
@@ -172,13 +175,23 @@ namespace am {
                                             }
                                             std::memcpy(ptr, &vertex, sizeof vertex);
                                         }
+
+                                        for (uint32 i = 0; i < vertex_count; ++i) {
+                                            const auto index = prv::vertex_components * i;
+                                            min_aabb.x = std::min(min_aabb.x, vertices[index + 0]);
+                                            min_aabb.y = std::min(min_aabb.y, vertices[index + 1]);
+                                            min_aabb.z = std::min(min_aabb.z, vertices[index + 2]);
+                                            max_aabb.x = std::max(max_aabb.x, vertices[index + 0]);
+                                            max_aabb.y = std::max(max_aabb.y, vertices[index + 1]);
+                                            max_aabb.z = std::max(max_aabb.z, vertices[index + 2]);
+                                        }
                                     }
 
                                     std::vector<uint32> indices;
                                     {
                                         const auto* accessor = primitive.indices;
                                         const auto* buf_view = accessor->buffer_view;
-                                        const char* data_ptr = (const char*)buffers[buf_view->buffer->uri];
+                                        const auto* data_ptr = (const char*)buf_view->buffer->data;
                                         indices.reserve(accessor->count);
                                         switch (accessor->component_type) {
                                             case cgltf_component_type_r_8:
@@ -199,7 +212,7 @@ namespace am {
                                                 std::copy(ptr, ptr + accessor->count, std::back_inserter(indices));
                                             } break;
 
-                                            default: break;
+                                            default: AM_UNREACHABLE();
                                         }
                                     }
                                     std::lock_guard lock(guard);
@@ -210,8 +223,20 @@ namespace am {
                                         .geometry = std::move(vertices),
                                         .indices = std::move(indices),
                                     });
-                                    submesh.transform = glm::mat4(1.0f);
+                                    {
+                                        const auto* base_color = primitive.material->pbr_metallic_roughness.base_color_factor;
+                                        std::memcpy(glm::value_ptr(submesh.material.base_color), base_color, sizeof(float32[4]));
+                                    }
+
                                     cgltf_node_transform_world(node, glm::value_ptr(submesh.transform));
+                                    submesh.aabb.center = (max_aabb + min_aabb) / 2.0f;
+                                    submesh.aabb.extents = {
+                                        max_aabb.x - submesh.aabb.center.x,
+                                        max_aabb.y - submesh.aabb.center.y,
+                                        max_aabb.z - submesh.aabb.center.z
+                                    };
+                                    submesh.aabb.min = min_aabb;
+                                    submesh.aabb.max = max_aabb;
                                     {
                                         const auto* material = primitive.material;
                                         const auto* texture = material->pbr_metallic_roughness.base_color_texture.texture;
@@ -234,11 +259,6 @@ namespace am {
                     AM_PROFILE_NAMED_SCOPE("model loader: cleaning up");
                     for (auto& task : subtasks) {
                         device->context()->scheduler()->WaitforTask(task.get(), enki::TASK_PRIORITY_HIGH);
-                    }
-                    for (auto& [uri, buffer] : buffers) {
-                        AM_UNLIKELY_IF(std::string_view(uri).find("base64") != std::string::npos) {
-                            options.memory.free_func(nullptr, (void*)buffer);
-                        }
                     }
                     cgltf_free(model);
                 }

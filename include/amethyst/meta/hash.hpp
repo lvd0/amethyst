@@ -61,8 +61,8 @@ namespace std {
     };
 
     AM_MAKE_HASHABLE(am::SDescriptorBinding, value, value.dynamic, value.index, value.count, value.type, value.stage);
-    AM_MAKE_HASHABLE(am::STypedBufferInfo, value, value.handle, value.offset, value.size);
-    AM_MAKE_HASHABLE(am::STextureInfo, value, value.handle, value.sampler);
-    AM_MAKE_HASHABLE(am::SSamplerInfo, value, value.filter, value.border_color, value.address_mode, value.anisotropy);
+    AM_MAKE_HASHABLE(am::SBufferInfo, value, value.handle, value.offset, value.size, value.address);
+    AM_MAKE_HASHABLE(am::STextureInfo, value, value.handle, value.sampler, value.layout);
+    AM_MAKE_HASHABLE(am::SSamplerInfo, value, value.filter, value.border_color, value.address_mode, value.reduction_mode, value.anisotropy);
     AM_MAKE_HASHABLE(am::STexturedMesh, value, value.geometry, value.albedo, value.normal, value.vertices, value.indices);
 } // namespace std

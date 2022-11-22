@@ -7,12 +7,13 @@ namespace am {
 
     CFramebuffer::~CFramebuffer() noexcept {
         AM_PROFILE_SCOPED();
+        AM_LOG_INFO(_device->logger(), "destroying framebuffer: {}", (const void*)_handle);
         vkDestroyFramebuffer(_device->native(), _handle, nullptr);
     }
 
     AM_NODISCARD CRcPtr<CFramebuffer> CFramebuffer::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         AM_LOG_INFO(device->logger(), "creating framebuffer with:");
         AM_LOG_INFO(device->logger(), "- references: {}", info.attachments.size());
         AM_LOG_INFO(device->logger(), "- render pass: {}", (const void*)info.pass->native());
@@ -28,7 +29,10 @@ namespace am {
                         .queue = EQueueType::Graphics,
                         .samples = description.samples,
                         .usage = attachment.usage,
-                        .format = description.format,
+                        .format = {
+                            description.format.internal,
+                            description.format.view,
+                        },
                         .layout = EImageLayout::Undefined,
                         .layers = attachment.layers,
                         .mips = attachment.mips,
@@ -99,8 +103,11 @@ namespace am {
         return _pass.get();
     }
 
-    void CFramebuffer::resize(uint32 width, uint32 height) noexcept {
+    bool CFramebuffer::resize(uint32 width, uint32 height) noexcept {
         AM_PROFILE_SCOPED();
+        if (_viewport.width == width && _viewport.height == height) {
+            return false;
+        }
         std::vector<CRcPtr<const CImage>> old_images;
         for (auto& [image, is_owning] : _images) {
             auto&& old = std::move(image);
@@ -109,7 +116,10 @@ namespace am {
                     .queue = EQueueType::Graphics,
                     .samples = (EImageSampleCount)old->samples(),
                     .usage = (EImageUsage)old->usage(),
-                    .format = (EResourceFormat)old->format(),
+                    .format = {
+                        (EResourceFormat)old->internal_format(),
+                        (EResourceFormat)old->view_format(),
+                    },
                     .layout = EImageLayout::Undefined,
                     .layers = old->layers(),
                     .mips = old->mips(),
@@ -139,9 +149,13 @@ namespace am {
         _device->cleanup_after(
             frames_in_flight,
             [handle = _handle, images = std::move(old_images)](const CDevice* device) mutable noexcept {
+                for (auto& image : images) {
+                    image.reset();
+                }
                 vkDestroyFramebuffer(device->native(), handle, nullptr);
             });
         AM_VULKAN_CHECK(_device->logger(), vkCreateFramebuffer(_device->native(), &framebuffer_info, nullptr, &_handle));
+        return true;
     }
 
     void CFramebuffer::update_attachment(uint32 index, const CImage* image) noexcept {

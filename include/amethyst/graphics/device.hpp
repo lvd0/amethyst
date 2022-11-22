@@ -18,10 +18,16 @@
     #pragma warning(pop)
 #endif
 
-#include <vulkan/vulkan.h>
 #include <volk.h>
+#include <vulkan/vulkan.h>
 
 #include <vk_mem_alloc.h>
+
+#if _WIN64
+    #include <VersionHelpers.h>
+    #include <dxgi1_2.h>
+    #include <aclapi.h>
+#endif
 
 #if defined(AM_ENABLE_AFTERMATH)
     #include <GFSDK_Aftermath.h>
@@ -30,7 +36,7 @@
 #endif
 
 #include <unordered_map>
-#include <queue>
+#include <deque>
 
 namespace am {
     enum class EDeviceExtension {
@@ -46,6 +52,13 @@ namespace am {
         BufferDeviceAddress
     };
 
+    enum class EVirtualAllocatorKind : uint32 {
+        VertexBuffer,
+        IndexBuffer,
+        StagingBuffer,
+        Count
+    };
+
 #if defined(AM_ENABLE_AFTERMATH)
     class CGPUCrashTrackerNV {
     public:
@@ -58,6 +71,27 @@ namespace am {
 
     private:
         std::mutex lock;
+    };
+#endif
+
+    struct SHeapBudget {
+        uint32 block_count;
+        uint32 allocation_count;
+        uint64 block_bytes;
+        uint64 allocation_bytes;
+    };
+
+#if _WIN64
+    class CWindowsSecurityAttributes {
+    public:
+        CWindowsSecurityAttributes();
+        ~CWindowsSecurityAttributes();
+
+        const SECURITY_ATTRIBUTES* get() const noexcept;
+
+    private:
+        SECURITY_ATTRIBUTES security_attributes = {};
+        PSECURITY_DESCRIPTOR security_descriptor = {};
     };
 #endif
 
@@ -87,15 +121,20 @@ namespace am {
 
         AM_NODISCARD spdlog::logger* logger() const noexcept;
 
+        AM_NODISCARD const VkPhysicalDeviceProperties& properties() const noexcept;
         AM_NODISCARD const VkPhysicalDeviceLimits& limits() const noexcept;
+        AM_NODISCARD const uint8 (&uuid() const noexcept)[VK_UUID_SIZE];
         AM_NODISCARD bool feature_support(EDeviceFeature) const noexcept;
+        AM_NODISCARD std::vector<SHeapBudget> heap_budgets() const noexcept;
 
-        AM_NODISCARD CBufferSuballocator* vertex_buffer_allocator() noexcept;
-        AM_NODISCARD CBufferSuballocator* index_buffer_allocator() noexcept;
+        AM_NODISCARD CVirtualAllocator* virtual_allocator(EVirtualAllocatorKind) noexcept;
+        AM_NODISCARD uint32 memory_type_index(uint32, EMemoryProperty) noexcept;
+        AM_NODISCARD const VkExportMemoryAllocateInfo* external_memory_attributes() noexcept;
 
         AM_NODISCARD uint32 acquire_image(CSwapchain*, const CSemaphore*) const noexcept;
-        AM_NODISCARD STextureInfo sample(const CAsyncTexture*, SSamplerInfo) noexcept;
-        AM_NODISCARD STextureInfo sample(const CImage*, SSamplerInfo) noexcept;
+        AM_NODISCARD STextureInfo sample(const CAsyncTexture*, SSamplerInfo, bool = false) noexcept;
+        AM_NODISCARD STextureInfo sample(const CImage*, SSamplerInfo, bool = false) noexcept;
+        AM_NODISCARD STextureInfo sample(const CImageView*, SSamplerInfo, bool = false) noexcept;
 
         AM_NODISCARD VkDescriptorSetLayout acquire_cached_item(const std::vector<SDescriptorBinding>&) noexcept;
         void set_cached_item(const std::vector<SDescriptorBinding>&, VkDescriptorSetLayout) noexcept;
@@ -117,6 +156,8 @@ namespace am {
 
         CDevice() noexcept;
 
+        AM_NODISCARD VkSampler _make_sampler(SSamplerInfo, bool) noexcept;
+
         VkDevice _handle = {};
         VkPhysicalDevice _gpu = {};
         VmaAllocator _allocator = {};
@@ -124,7 +165,9 @@ namespace am {
         VkPhysicalDeviceVulkan12Features _features_12 = {};
         VkPhysicalDeviceVulkan13Features _features_13 = {};
         VkPhysicalDeviceFeatures2 _features = {};
-        VkPhysicalDeviceProperties _properties = {};
+        VkPhysicalDeviceProperties2 _properties = {};
+        VkPhysicalDeviceIDProperties _gpu_id = {};
+        VkPhysicalDeviceMemoryProperties _memory_props = {};
         struct {
             bool debug_names = false;
         } _features_custom;
@@ -133,13 +176,12 @@ namespace am {
         CQueue* _transfer = nullptr;
         CQueue* _compute = nullptr;
 
-        std::unique_ptr<CBufferSuballocator> _vertex_buffer_suballocator;
-        std::unique_ptr<CBufferSuballocator> _index_buffer_suballocator;
+        std::vector<std::unique_ptr<CVirtualAllocator>> _virtual_allocators;
 
         DescriptorSetLayoutCache _set_layout_cache;
         SamplerCache _sampler_cache;
 
-        std::queue<SCleanupPayload> _to_delete;
+        std::deque<SCleanupPayload> _to_delete;
 
 #if defined(AM_ENABLE_AFTERMATH)
         std::unique_ptr<CGPUCrashTrackerNV> _aftermath_context;

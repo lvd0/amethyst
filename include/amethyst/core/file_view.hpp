@@ -30,7 +30,7 @@ namespace am {
 
         void* _handle = nullptr;
         void* _mapping = nullptr;
-        uint64 _size = 0;
         const void* _data = nullptr;
+        uint64 _size = 0;
     };
 } // namespace am

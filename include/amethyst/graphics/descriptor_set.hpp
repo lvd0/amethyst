@@ -22,21 +22,37 @@ namespace am {
         struct SCreateInfo {
             CRcPtr<CDescriptorPool> pool;
             CRcPtr<CPipeline> pipeline;
-            uint32 layout = 0;
+            uint32 index = 0;
+        };
+        struct SRawCreateInfo {
+            CRcPtr<CDescriptorPool> pool;
+            VkDescriptorSetLayout layout;
+            uint32 index = 0;
+            uint32 dynamic_count = 0;
         };
 
         ~CDescriptorSet() noexcept;
 
-        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, SCreateInfo) noexcept;
+        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, const SCreateInfo&) noexcept;
         AM_NODISCARD static std::vector<CRcPtr<Self>> make(const CRcPtr<CDevice>&, uint32, SCreateInfo&&) noexcept;
+
+        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, const SRawCreateInfo&) noexcept;
+        AM_NODISCARD static std::vector<CRcPtr<Self>> make(const CRcPtr<CDevice>&, uint32, SRawCreateInfo&&) noexcept;
 
         AM_NODISCARD VkDescriptorSet native() const noexcept;
         AM_NODISCARD uint32 index() const noexcept;
 
-        Self& bind(const std::string&, STypedBufferInfo) noexcept;
-        Self& bind(const std::string&, const CImage*) noexcept;
-        Self& bind(const std::string&, STextureInfo) noexcept;
-        Self& bind(const std::string&, const std::vector<STextureInfo>&) noexcept;
+        Self& bind(const std::string&, SBufferInfo, uint32 = 0) noexcept;
+        Self& bind(const std::string&, const std::vector<SBufferInfo>&, uint32 = 0) noexcept;
+        Self& bind(const std::string&, const CImage*, uint32 = 0) noexcept;
+        Self& bind(const std::string&, const CImageView*, uint32 = 0) noexcept;
+        Self& bind(const std::string&, STextureInfo, uint32 = 0) noexcept;
+        Self& bind(const std::string&, const std::vector<CRcPtr<CImageView>>&, uint32 = 0) noexcept;
+        Self& bind(const std::string&, const std::vector<STextureInfo>&, uint32 = 0) noexcept;
+
+        Self& bind(const SDescriptorBinding&, STextureInfo, uint32 = 0) noexcept;
+
+        void update_pipeline(CRcPtr<CPipeline>) noexcept;
 
     private:
         struct SCachedDescriptors {
@@ -55,4 +71,6 @@ namespace am {
         CRcPtr<CPipeline> _pipeline;
         CRcPtr<CDevice> _device;
     };
+
+    AM_NODISCARD AM_MODULE SDescriptorBinding make_descriptor_binding(uint32, EDescriptorType) noexcept;
 } // namespace am

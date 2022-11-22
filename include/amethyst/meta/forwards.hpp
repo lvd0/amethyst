@@ -17,6 +17,7 @@ namespace am {
     class CQueue;
     class CRenderPass;
     class CImage;
+    class CImageView;
     class CSwapchain;
     class CCommandBuffer;
     class CFence;
@@ -24,7 +25,7 @@ namespace am {
     struct SDescriptorBinding;
     struct SDescriptorSetLayout;
     class CPipeline;
-    struct STypedBufferInfo;
+    struct SBufferInfo;
     template <typename>
     class CTypedBuffer;
     class CAsyncMesh;
@@ -33,11 +34,15 @@ namespace am {
     struct SSamplerInfo;
     struct STextureInfo;
     class CAsyncTexture;
-    class CBufferSuballocator;
-    struct SBufferSlice;
+    class CVirtualAllocator;
+    class CRawBuffer;
+    class CBufferSlice;
+    class CUIContext;
+    class CQueryPool;
 
     class CWindowingSystem;
     class CWindow;
+    class CInput;
 
     namespace prv {
         template <typename T>

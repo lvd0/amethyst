@@ -20,25 +20,31 @@ namespace am {
     public:
         using Self = CSwapchain;
         struct SCreateInfo {
-            // TODO: ?
+            EImageUsage usage =
+                EImageUsage::ColorAttachment |
+                EImageUsage::TransferDST;
+            bool vsync = false;
+            bool srgb = true;
         };
 
         ~CSwapchain() noexcept;
 
-        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, CRcPtr<CWindow>) noexcept;
+        AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, CRcPtr<CWindow>, SCreateInfo&&) noexcept;
 
         AM_NODISCARD VkSwapchainKHR native() const noexcept;
         AM_NODISCARD EResourceFormat format() const noexcept;
         AM_NODISCARD uint32 width() const noexcept;
         AM_NODISCARD uint32 height() const noexcept;
+        AM_NODISCARD uint32 image_count() const noexcept;
         AM_NODISCARD const CImage* image(uint32) const noexcept;
         AM_NODISCARD bool is_lost() const noexcept;
 
         void set_lost() noexcept;
         void recreate() noexcept;
+        void recreate(SCreateInfo&&) noexcept;
 
     private:
-        static void _native_make(CDevice* device, CWindow* window, Self* result) noexcept;
+        static void _native_make(CDevice* device, CWindow* window, SCreateInfo&&, Self*) noexcept;
 
         CSwapchain() noexcept;
 
@@ -48,6 +54,8 @@ namespace am {
         uint32 _width = 0;
         uint32 _height = 0;
         std::vector<CRcPtr<CImage>> _images;
+        bool _vsync = false;
+        bool _srgb = false;
         bool _is_lost = false;
 
         CRcPtr<CDevice> _device;

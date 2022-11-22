@@ -2,6 +2,7 @@
 #include <amethyst/graphics/descriptor_set.hpp>
 #include <amethyst/graphics/render_pass.hpp>
 #include <amethyst/graphics/framebuffer.hpp>
+#include <amethyst/graphics/query_pool.hpp>
 #include <amethyst/graphics/async_mesh.hpp>
 #include <amethyst/graphics/pipeline.hpp>
 #include <amethyst/graphics/image.hpp>
@@ -56,7 +57,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CCommandBuffer> CCommandBuffer::make(CRcPtr<CDevice> device, SCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         VkCommandBufferAllocateInfo allocate_info = {};
         allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocate_info.commandPool = get_command_pool(device.get(), info);
@@ -101,13 +102,15 @@ namespace am {
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::begin_render_pass(const CFramebuffer* framebuffer) noexcept {
+    CCommandBuffer& CCommandBuffer::begin_render_pass(const CFramebuffer* framebuffer, const CRenderPass* render_pass) noexcept {
         AM_PROFILE_SCOPED();
         _active_framebuffer = framebuffer;
         const auto clears = framebuffer->clears();
         VkRenderPassBeginInfo begin_info = {};
         begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        begin_info.renderPass = framebuffer->render_pass()->native();
+        begin_info.renderPass = render_pass ?
+            render_pass->native() :
+            framebuffer->render_pass()->native();
         begin_info.framebuffer = framebuffer->native();
         begin_info.renderArea = { {}, framebuffer->viewport() };
         begin_info.clearValueCount = (uint32)clears.size();
@@ -168,13 +171,13 @@ namespace am {
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::bind_vertex_buffer(const STypedBufferInfo& buffer) noexcept {
+    CCommandBuffer& CCommandBuffer::bind_vertex_buffer(const SBufferInfo& buffer) noexcept {
         AM_PROFILE_SCOPED();
         vkCmdBindVertexBuffers(_handle, 0, 1, &buffer.handle, &buffer.offset);
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::bind_index_buffer(const STypedBufferInfo& buffer) noexcept {
+    CCommandBuffer& CCommandBuffer::bind_index_buffer(const SBufferInfo& buffer) noexcept {
         AM_PROFILE_SCOPED();
         vkCmdBindIndexBuffer(_handle, buffer.handle, buffer.offset, VK_INDEX_TYPE_UINT32);
         return *this;
@@ -183,6 +186,13 @@ namespace am {
     CCommandBuffer& CCommandBuffer::push_constants(EShaderStage stage, const void* data, uint32 size) noexcept {
         AM_PROFILE_SCOPED();
         vkCmdPushConstants(_handle, _active_pipeline->main_layout(), prv::as_vulkan(stage), 0, size, data);
+        return *this;
+    }
+
+    CCommandBuffer& CCommandBuffer::bind_mesh(const CAsyncMesh* mesh) noexcept {
+        AM_PROFILE_SCOPED();
+        bind_vertex_buffer(mesh->vertices()->info());
+        bind_vertex_buffer(mesh->indices()->info());
         return *this;
     }
 
@@ -198,17 +208,28 @@ namespace am {
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::draw_indirect(const STypedBufferInfo& buffer) noexcept {
+    CCommandBuffer& CCommandBuffer::draw_indirect(const SBufferInfo& buffer, uint32 draw_count) noexcept {
         AM_PROFILE_SCOPED();
-        const auto draw_count = buffer.size / sizeof(SDrawCommandIndirect);
-        vkCmdDrawIndirect(_handle, buffer.handle, buffer.offset, (uint32)draw_count, sizeof(SDrawCommandIndirect));
+        vkCmdDrawIndirect(_handle, buffer.handle, buffer.offset, draw_count, sizeof(SDrawCommandIndirect));
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::draw_indexed_indirect(const STypedBufferInfo& buffer) noexcept {
+    CCommandBuffer& CCommandBuffer::draw_indexed_indirect(const SBufferInfo& buffer, uint32 draw_count) noexcept {
         AM_PROFILE_SCOPED();
-        const auto draw_count = buffer.size / sizeof(SDrawCommandIndexedIndirect);
-        vkCmdDrawIndexedIndirect(_handle, buffer.handle, buffer.offset, (uint32)draw_count, sizeof(SDrawCommandIndexedIndirect));
+        vkCmdDrawIndexedIndirect(_handle, buffer.handle, buffer.offset, draw_count, sizeof(SDrawCommandIndexedIndirect));
+        return *this;
+    }
+
+    CCommandBuffer& CCommandBuffer::draw_indexed_indirect_count(const SBufferInfo& buffer, const SBufferInfo& draw_count, uint32 max_draw_count) noexcept {
+        AM_PROFILE_SCOPED();
+        vkCmdDrawIndexedIndirectCount(
+            _handle,
+            buffer.handle,
+            buffer.offset,
+            draw_count.handle,
+            draw_count.offset,
+            max_draw_count,
+            sizeof(SDrawCommandIndexedIndirect));
         return *this;
     }
 
@@ -226,7 +247,7 @@ namespace am {
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::copy_buffer(const STypedBufferInfo& source, const STypedBufferInfo& dest) noexcept {
+    CCommandBuffer& CCommandBuffer::copy_buffer(const SBufferInfo& source, const SBufferInfo& dest) noexcept {
         AM_PROFILE_SCOPED();
         VkBufferCopy region = {};
         region.srcOffset = source.offset;
@@ -236,7 +257,7 @@ namespace am {
         return *this;
     }
 
-    CCommandBuffer& CCommandBuffer::copy_buffer_to_image(const STypedBufferInfo& buffer, const CImage* image, uint32 mip) noexcept {
+    CCommandBuffer& CCommandBuffer::copy_buffer_to_image(const SBufferInfo& buffer, const CImage* image, uint32 mip) noexcept {
         AM_PROFILE_SCOPED();
         VkBufferImageCopy region = {};
         region.bufferOffset = buffer.offset;
@@ -248,16 +269,10 @@ namespace am {
         region.imageSubresource.layerCount = 1;
         region.imageOffset = { 0, 0, 0 };
         region.imageExtent = {
-            image->width() >> mip,
-            image->height() >> mip,
+            std::max(image->width() >> mip, 1u),
+            std::max(image->height() >> mip, 1u),
             1
         };
-        AM_UNLIKELY_IF(region.imageExtent.width == 0) {
-            region.imageExtent.width = 1;
-        }
-        AM_UNLIKELY_IF(region.imageExtent.height == 0) {
-            region.imageExtent.height = 1;
-        }
         vkCmdCopyBufferToImage(_handle, buffer.handle, image->native(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         return *this;
     }
@@ -371,6 +386,40 @@ namespace am {
         return *this;
     }
 
+    CCommandBuffer& CCommandBuffer::clear_image(const CImage* image, CClearValue&& clear) noexcept {
+        AM_PROFILE_SCOPED();
+        const auto native = clear.native();
+        VkImageSubresourceRange range = {};
+        range.aspectMask = image->aspect();
+        range.baseMipLevel = 0;
+        range.levelCount = image->mips();
+        range.baseArrayLayer = 0;
+        range.layerCount = image->layers();
+        switch (clear.type()) {
+            case EClearValueType::Color:
+                vkCmdClearColorImage(
+                    _handle,
+                    image->native(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    &native.color,
+                    1,
+                    &range);
+                break;
+            case EClearValueType::Depth:
+                vkCmdClearDepthStencilImage(
+                    _handle,
+                    image->native(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    &native.depthStencil,
+                    1,
+                    &range);
+                break;
+            default: break;
+        }
+
+        return *this;
+    }
+
     CCommandBuffer& CCommandBuffer::transfer_ownership(const CQueue& source, const CQueue& dest, const SBufferMemoryBarrier& info) noexcept {
         AM_PROFILE_SCOPED();
         VkBufferMemoryBarrier barrier = {};
@@ -477,6 +526,19 @@ namespace am {
     CCommandBuffer& CCommandBuffer::end() noexcept {
         AM_PROFILE_SCOPED();
         AM_VULKAN_CHECK(_device->logger(), vkEndCommandBuffer(_handle));
+        return *this;
+    }
+
+    CCommandBuffer& CCommandBuffer::begin_query(const CQueryPool* query, uint32 index) noexcept {
+        AM_PROFILE_SCOPED();
+        vkCmdResetQueryPool(_handle, query->native(), index, (uint32)query->count());
+        vkCmdBeginQuery(_handle, query->native(), index, {});
+        return *this;
+    }
+
+    CCommandBuffer& CCommandBuffer::end_query(const CQueryPool* query, uint32 index) noexcept {
+        AM_PROFILE_SCOPED();
+        vkCmdEndQuery(_handle, query->native(), index);
         return *this;
     }
 

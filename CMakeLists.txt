@@ -48,6 +48,38 @@ add_subdirectory(ext/VulkanMemoryAllocator)
 
 add_subdirectory(ext/meshoptimizer)
 
+add_library(imgui
+    ext/imgui/imconfig.h
+    ext/imgui/imgui.h
+    ext/imgui/imgui.cpp
+    ext/imgui/imgui_demo.cpp
+    ext/imgui/imgui_draw.cpp
+    ext/imgui/imgui_internal.h
+    ext/imgui/imgui_tables.cpp
+    ext/imgui/imgui_widgets.cpp
+    ext/imgui/imstb_rectpack.h
+    ext/imgui/imstb_textedit.h
+    ext/imgui/imstb_truetype.h
+    ext/imgui/backends/imgui_impl_glfw.h
+    ext/imgui/backends/imgui_impl_glfw.cpp
+    ext/imgui/backends/imgui_impl_vulkan.h
+    ext/imgui/backends/imgui_impl_vulkan.cpp)
+target_include_directories(imgui PUBLIC ext/imgui)
+target_link_libraries(imgui PUBLIC glfw volk)
+target_compile_definitions(imgui PUBLIC
+    VK_ENABLE_BETA_EXTENSIONS
+    VK_NO_PROTOTYPES)
+
+add_library(implot
+    ext/implot/implot.cpp
+    ext/implot/implot.h
+    ext/implot/implot_demo.cpp
+    ext/implot/implot_internal.h
+    ext/implot/implot_items.cpp)
+target_include_directories(implot PUBLIC
+    ext/imgui
+    ext/implot)
+
 add_library(vma STATIC src/ext/vma.cpp)
 target_include_directories(vma PUBLIC
     ${Vulkan_INCLUDE_DIRS}
@@ -71,12 +103,16 @@ target_compile_definitions(spdlog PRIVATE FMT_EXCEPTIONS=0)
 option(AMETHYST_ENABLE_TRACY "Builds and links against Tracy to profile the application." OFF)
 option(AMETHYST_ENABLE_AFTERMATH "Uses NVIDIA NSight Aftermath SDK to debug Vulkan failures." OFF)
 option(AMETHYST_ENABLE_LOGGING "Enables logger output to stdout." ON)
+option(AMETHYST_CUDA_COMPATIBILITY "Makes the library compatible with nvcc." OFF)
 option(AMETHYST_BUILD_SHARED "Builds the application as a shared library." OFF)
+option(AMETHYST_BUILD_TESTS "Builds the application's test programs." OFF)
 
 set(AMETHYST_ENABLE_TRACY OFF CACHE BOOL "" FORCE)
 set(AMETHYST_ENABLE_AFTERMATH OFF CACHE BOOL "" FORCE)
 set(AMETHYST_ENABLE_LOGGING ON CACHE BOOL "" FORCE)
+set(AMETHYST_CUDA_COMPATIBILITY OFF CACHE BOOL "" FORCE)
 set(AMETHYST_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(AMETHYST_BUILD_TESTS ON CACHE BOOL "" FORCE)
 
 if (AMETHYST_ENABLE_AFTERMATH)
     set(NSIGHT_AFTERMATH_INCLUDE_DIRS $ENV{NSIGHT_AFTERMATH_SDK}/include)
@@ -107,7 +143,7 @@ add_library(amethyst
     include/amethyst/graphics/async_mesh.hpp
     include/amethyst/graphics/async_model.hpp
     include/amethyst/graphics/async_texture.hpp
-    include/amethyst/graphics/buffer_suballocator.hpp
+    include/amethyst/graphics/virtual_allocator.hpp
     include/amethyst/graphics/clear_value.hpp
     include/amethyst/graphics/command_buffer.hpp
     include/amethyst/graphics/context.hpp
@@ -118,11 +154,13 @@ add_library(amethyst
     include/amethyst/graphics/framebuffer.hpp
     include/amethyst/graphics/image.hpp
     include/amethyst/graphics/pipeline.hpp
+    include/amethyst/graphics/query_pool.hpp
     include/amethyst/graphics/queue.hpp
     include/amethyst/graphics/render_pass.hpp
     include/amethyst/graphics/semaphore.hpp
-    include/amethyst/graphics/typed_buffer.hpp
     include/amethyst/graphics/swapchain.hpp
+    include/amethyst/graphics/typed_buffer.hpp
+    include/amethyst/graphics/ui_context.hpp
 
     # Meta
     include/amethyst/meta/constants.hpp
@@ -147,7 +185,7 @@ add_library(amethyst
     src/graphics/async_mesh.cpp
     src/graphics/async_model.cpp
     src/graphics/async_texture.cpp
-    src/graphics/buffer_suballocator.cpp
+    src/graphics/virtual_allocator.cpp
     src/graphics/command_buffer.cpp
     src/graphics/context.cpp
     src/graphics/descriptor_pool.cpp
@@ -157,10 +195,12 @@ add_library(amethyst
     src/graphics/framebuffer.cpp
     src/graphics/image.cpp
     src/graphics/pipeline.cpp
+    src/graphics/query_pool.cpp
     src/graphics/queue.cpp
     src/graphics/render_pass.cpp
     src/graphics/semaphore.cpp
     src/graphics/swapchain.cpp
+    src/graphics/ui_context.cpp
 
     # Meta
 
@@ -190,6 +230,7 @@ target_compile_definitions(amethyst PUBLIC
 
     $<$<BOOL:${AMETHYST_BUILD_SHARED}>:AM_BUILD_DLL>
     $<$<BOOL:${AMETHYST_ENABLE_LOGGING}>:AM_DEBUG_LOGGING>
+    $<$<BOOL:${AMETHYST_CUDA_COMPATIBILITY}>:AM_CUDA_COMPAT>
 
     SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
 
@@ -221,6 +262,8 @@ target_link_libraries(amethyst PUBLIC
     vma
     glfw
     cgltf
+    imgui
+    implot
     spdlog
     enkiTS
     shaderc
@@ -229,6 +272,13 @@ target_link_libraries(amethyst PUBLIC
     $<$<BOOL:${AMETHYST_ENABLE_AFTERMATH}>:GFSDK_Aftermath_Lib.x64>
     $<$<BOOL:${AMETHYST_ENABLE_TRACY}>:TracyClient>)
 
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/data)
+
+add_custom_command(TARGET amethyst PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/fonts
+    ${CMAKE_BINARY_DIR}/data/fonts)
+
 if (AMETHYST_ENABLE_AFTERMATH)
     configure_file(
         $ENV{NSIGHT_AFTERMATH_SDK}/lib/x64/GFSDK_Aftermath_Lib.x64.dll
@@ -236,8 +286,7 @@ if (AMETHYST_ENABLE_AFTERMATH)
         COPYONLY)
 endif()
 
-add_executable(test_sponza tests/test_sponza.cpp)
-target_link_libraries(test_sponza PRIVATE amethyst)
-
-add_executable(test_visbuffer tests/test_visbuffer.cpp)
-target_link_libraries(test_visbuffer PRIVATE amethyst)
+if (AMETHYST_BUILD_TESTS)
+    add_executable(test_shadows tests/test_shadows.cpp)
+    target_link_libraries(test_shadows PRIVATE amethyst)
+endif()

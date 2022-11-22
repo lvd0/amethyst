@@ -2,8 +2,8 @@
 #extension GL_EXT_buffer_reference : enable
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
-#extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_control_flow_attributes : enable
 #extension GL_ARB_separate_shader_objects : enable
 
 #include "common.glsl"
@@ -135,8 +135,8 @@ vec4 interpolate_attributes(in SPartialDerivative derivatives, in vec4[3] attrib
         attributes[2] * derivatives.lambda.z;
 }
 
-vec3 compute_normals(in uint draw_id, in mat3 TBN, in vec3 a_normal, in SUVDeriv a_uvs) {
-    const uint normal_index = objects[draw_id].normal_index;
+vec3 compute_normals(in uint object_id, in mat3 TBN, in vec3 a_normal, in SUVDeriv a_uvs) {
+    const uint normal_index = objects[object_id].normal_index;
     if (normal_index == 0) {
         return normalize(a_normal);
     }
@@ -144,8 +144,8 @@ vec3 compute_normals(in uint draw_id, in mat3 TBN, in vec3 a_normal, in SUVDeriv
     return normalize(TBN * (2.0 * normal - 1.0));
 }
 
-vec3 compute_specular(in uint draw_id, in SUVDeriv a_uvs) {
-    const uint specular_index = objects[draw_id].specular_index;
+vec3 compute_specular(in uint object_id, in SUVDeriv a_uvs) {
+    const uint specular_index = objects[object_id].specular_index;
     if (specular_index == 0) {
         return vec3(0.0);
     }
@@ -181,6 +181,19 @@ vec3 calculate_directional_light(in SDirectionalLight light, in vec3 albedo, in 
     return diffuse_color + specular_color;
 }
 
+vec3 as_srgb(in vec3 color) {
+    vec3 result = color;
+    [[unroll]]
+    for (uint i = 0; i < 3; ++i) {
+        if (result[i] <= 0.0031308) {
+            result[i] *= 12.92;
+        } else {
+            result[i] = 1.055 * pow(result[i], 0.41666) - 0.055;
+        }
+    }
+    return result;
+}
+
 void main() {
     if (object_count == 0) {
         discard;
@@ -194,11 +207,11 @@ void main() {
         discard;
     }
     const vec2 ndc_uvs = i_uvs * 2.0 - 1.0;
-    const uint draw_id = (visibility_data.x >> 16u) & 0xffffu;
+    const uint object_id = (visibility_data.x >> 16u) & 0xffffu;
     const uint instance_id = (visibility_data.x & 0xffffu) - 1;
     const uint primitive_id = visibility_data.y;
 
-    const SObjectData object = objects[draw_id];
+    const SObjectData object = objects[object_id];
     const int vertex_offset = object.vertex_offset;
     const uint index_offset = object.index_offset;
     const mat4 local_transform = local_transforms[object.transform_index[0]].current;
@@ -245,19 +258,18 @@ void main() {
     const vec4 raw_tangent_1 = vertices[1].tangent;
     const vec4 raw_tangent_2 = vertices[2].tangent;
     const vec4 a_tangent = normalize(interpolate_attributes(derivatives, vec4[](raw_tangent_0, raw_tangent_1, raw_tangent_2)));
-
     mat3 TBN;
+    mat3 inv_model = mat3(transpose(inverse(model)));
     {
-        mat3 t_model = mat3(model);
-        const vec3 T = normalize(t_model * vec3(a_tangent));
-        const vec3 B = normalize(t_model * cross(a_normal, vec3(a_tangent)) * a_tangent.w);
-        const vec3 N = normalize(t_model * a_normal);
+        const vec3 T = normalize(inv_model * vec3(a_tangent));
+        const vec3 B = normalize(inv_model * cross(a_normal, vec3(a_tangent)) * a_tangent.w);
+        const vec3 N = normalize(inv_model * a_normal);
         TBN = mat3(T, B, N);
     }
 
     const vec3 albedo = textureGrad(u_textures[object.albedo_index], a_uvs.uvs, a_uvs.ddx, a_uvs.ddy).rgb;
-    const vec3 normal = compute_normals(draw_id, TBN, mat3(model) * a_normal, a_uvs);
-    const vec3 specular = compute_specular(draw_id, a_uvs);
+    const vec3 normal = compute_normals(object_id, TBN, inv_model * a_normal, a_uvs);
+    const vec3 specular = compute_specular(object_id, a_uvs);
     const vec3 frag_pos = vec3(model * vec4(a_position, 1.0));
     const vec3 view_dir = normalize(vec3(camera.position) - frag_pos);
     vec3 color = albedo * AMBIENT_FACTOR;
@@ -269,5 +281,5 @@ void main() {
         color += calculate_point_light(point_lights[i], albedo, normal, specular, view_dir, frag_pos);
     }
 
-    o_pixel = vec4(color, 1.0);
+    o_pixel = vec4(as_srgb(color), 1.0);
 }

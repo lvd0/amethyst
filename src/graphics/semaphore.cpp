@@ -10,7 +10,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CSemaphore> CSemaphore::make(CRcPtr<CDevice> device) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         VkSemaphoreCreateInfo semaphore_info = {};
         semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         AM_VULKAN_CHECK(device->logger(), vkCreateSemaphore(device->native(), &semaphore_info, nullptr, &result->_handle));

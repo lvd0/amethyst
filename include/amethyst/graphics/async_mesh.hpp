@@ -2,7 +2,7 @@
 
 #include <amethyst/core/rc_ptr.hpp>
 
-#include <amethyst/graphics/buffer_suballocator.hpp>
+#include <amethyst/graphics/virtual_allocator.hpp>
 #include <amethyst/graphics/typed_buffer.hpp>
 #include <amethyst/graphics/device.hpp>
 #include <amethyst/graphics/fence.hpp>
@@ -45,8 +45,8 @@ namespace am {
         AM_NODISCARD static CRcPtr<Self> sync_make(CRcPtr<CDevice>, SCreateInfo&&) noexcept;
         AM_NODISCARD static CRcPtr<Self> make(CRcPtr<CDevice>, SCreateInfo&&) noexcept;
 
-        AM_NODISCARD const SBufferSlice* vertices() const noexcept;
-        AM_NODISCARD const SBufferSlice* indices() const noexcept;
+        AM_NODISCARD const CBufferSlice* vertices() const noexcept;
+        AM_NODISCARD const CBufferSlice* indices() const noexcept;
         AM_NODISCARD uint64 vertex_offset() const noexcept;
         AM_NODISCARD uint64 index_offset() const noexcept;
 
@@ -56,9 +56,8 @@ namespace am {
     private:
         CAsyncMesh() noexcept;
 
-        SBufferSlice _vertices;
-        SBufferSlice _indices;
-
+        CBufferSlice _vertices;
+        CBufferSlice _indices;
         mutable std::unique_ptr<enki::TaskSet> _task; // nullptr if it was not requested via "make()"
 
         CRcPtr<CDevice> _device;

@@ -20,7 +20,10 @@ namespace am {
             EImageLayout initial = {};
             EImageLayout final = {};
         };
-        EResourceFormat format = {};
+        struct {
+            EResourceFormat internal = {};
+            EResourceFormat view = {};
+        } format = {};
         EImageSampleCount samples = {};
         SLayout layout = {};
         CClearValue clear;

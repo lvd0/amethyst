@@ -5,6 +5,8 @@
 #include <utility>
 
 namespace am {
+    constexpr struct SDontGrab {} dont_grab;
+
     template <typename T>
     class AM_MODULE CRcPtr {
     public:
@@ -18,15 +20,18 @@ namespace am {
         AM_DECLARE_MOVE(CRcPtr);
 
         AM_NODISCARD static Self make(T*) noexcept;
+        AM_NODISCARD static Self make(T*, SDontGrab) noexcept;
         template <typename... Args>
         AM_NODISCARD static Self make(Args&&...) noexcept;
 
         template <typename U = std::add_const_t<T>>
         CRcPtr<U> as_const() const noexcept;
 
+        void swap(CRcPtr<T>&) noexcept;
         void reset() noexcept;
 
         AM_NODISCARD T* get() const noexcept;
+        AM_NODISCARD T* release() noexcept;
 
         AM_NODISCARD T& operator *() noexcept;
         AM_NODISCARD const T& operator *() const noexcept;
@@ -61,31 +66,32 @@ namespace am {
     template <typename T>
     CRcPtr<T>::CRcPtr(const CRcPtr& other) noexcept {
         AM_PROFILE_SCOPED();
-        *this = other;
-    }
-
-    template <typename T>
-    CRcPtr<T>& CRcPtr<T>::operator =(const CRcPtr& other) noexcept {
-        AM_PROFILE_SCOPED();
         AM_UNLIKELY_IF(this != &other) {
             _ptr = other._ptr;
             AM_LIKELY_IF(_ptr) {
                 _ptr->grab();
             }
         }
+    }
+
+    template <typename T>
+    CRcPtr<T>& CRcPtr<T>::operator =(const CRcPtr& other) noexcept {
+        AM_PROFILE_SCOPED();
+        CRcPtr(other).swap(*this);
         return *this;
     }
 
     template <typename T>
     CRcPtr<T>::CRcPtr(CRcPtr&& other) noexcept {
         AM_PROFILE_SCOPED();
-        *this = std::move(other);
+        using std::swap;
+        swap(_ptr, other._ptr);
     }
 
     template <typename T>
     CRcPtr<T>& CRcPtr<T>::operator =(CRcPtr&& other) noexcept {
         AM_PROFILE_SCOPED();
-        std::swap(_ptr, other._ptr);
+        CRcPtr(std::move(other)).swap(*this);
         return *this;
     }
 
@@ -97,6 +103,14 @@ namespace am {
         AM_LIKELY_IF(ptr) {
             result._ptr->grab();
         }
+        return result;
+    }
+
+    template <typename T>
+    AM_NODISCARD CRcPtr<T> CRcPtr<T>::make(T* ptr, SDontGrab) noexcept {
+        AM_PROFILE_SCOPED();
+        Self result;
+        result._ptr = ptr;
         return result;
     }
 
@@ -113,7 +127,15 @@ namespace am {
     template <typename T>
     template <typename U>
     CRcPtr<U> CRcPtr<T>::as_const() const noexcept {
+        AM_PROFILE_SCOPED();
         return CRcPtr<U>::make(static_cast<U*>(_ptr));
+    }
+
+    template <typename T>
+    void CRcPtr<T>::swap(CRcPtr<T>& other) noexcept {
+        AM_PROFILE_SCOPED();
+        using std::swap;
+        swap(_ptr, other._ptr);
     }
 
     template <typename T>
@@ -126,6 +148,13 @@ namespace am {
     AM_NODISCARD T* CRcPtr<T>::get() const noexcept {
         AM_PROFILE_SCOPED();
         return _ptr;
+    }
+
+    template <typename T>
+    AM_NODISCARD T* CRcPtr<T>::release() noexcept {
+        AM_PROFILE_SCOPED();
+        AM_ASSERT(_ptr->drop() == 0, "release() only if refcount is 1");
+        return std::exchange(_ptr, nullptr);
     }
 
     template <typename T>

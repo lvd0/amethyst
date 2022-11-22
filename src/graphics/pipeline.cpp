@@ -114,6 +114,7 @@ namespace am {
                                         VkDescriptorType descriptor,
                                         VkShaderStageFlags stage,
                                         bool push_constant = false) {
+        AM_PROFILE_SCOPED();
         if (push_constant) {
             if (!resources.empty()) {
                 const auto& resource = resources[0];
@@ -137,15 +138,24 @@ namespace am {
             const auto& type = compiler.get_type(each.type_id);
             auto count = 1u;
             auto is_dynamic = false;
-            if (type.basetype == spvc::SPIRType::SampledImage) {
-                const bool is_array = !type.array.empty();
-                is_dynamic = is_array && type.array[0] == 0;
-                if (is_dynamic) {
-                    const auto& limits = device->limits();
-                    count = std::min<uint32>(limits.maxPerStageDescriptorSamplers, 4096);
-                } else if (is_array) {
-                    count = type.array[0];
+            const bool is_array = !type.array.empty();
+            is_dynamic = is_array && type.array[0] == 0;
+            if (is_dynamic) {
+                const auto& limits = device->limits();
+                switch (descriptor) {
+                    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                        count = std::min<uint32>(limits.maxPerStageDescriptorSamplers, 4096);
+                        break;
+                    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                        count = std::min<uint32>(limits.maxPerStageDescriptorStorageBuffers, 4096);
+                        break;
+                    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                        count = std::min<uint32>(limits.maxPerStageDescriptorUniformBuffers, 4096);
+                        break;
+                    default: break;
                 }
+            } else if (is_array) {
+                count = type.array[0];
             }
             auto& layout = descriptor_layout[set];
             const auto found = std::find_if(layout.begin(), layout.end(), [binding](const auto& each) {
@@ -177,7 +187,7 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CPipeline> CPipeline::make(CRcPtr<CDevice> device, SGraphicsCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         bool should_create_vertex = !info.vertex.empty();
         bool should_create_fragment = !info.fragment.empty();
         bool should_create_geometry = !info.geometry.empty();
@@ -264,6 +274,53 @@ namespace am {
                 module_create_info.codeSize = size_bytes(binary);
                 module_create_info.pCode = binary.data();
                 AM_VULKAN_CHECK(device->logger(), vkCreateShaderModule(device->native(), &module_create_info, nullptr, &geometry_stage.module));
+
+                process_resource(
+                    device.get(),
+                    descriptor_layout,
+                    result->_bindings,
+                    push_constants,
+                    compiler,
+                    resources.push_constant_buffers,
+                    {},
+                    VK_SHADER_STAGE_GEOMETRY_BIT,
+                    true);
+                process_resource(
+                    device.get(),
+                    descriptor_layout,
+                    result->_bindings,
+                    push_constants,
+                    compiler,
+                    resources.uniform_buffers,
+                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    VK_SHADER_STAGE_GEOMETRY_BIT);
+                process_resource(
+                    device.get(),
+                    descriptor_layout,
+                    result->_bindings,
+                    push_constants,
+                    compiler,
+                    resources.storage_buffers,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    VK_SHADER_STAGE_GEOMETRY_BIT);
+                process_resource(
+                    device.get(),
+                    descriptor_layout,
+                    result->_bindings,
+                    push_constants,
+                    compiler,
+                    resources.sampled_images,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    VK_SHADER_STAGE_GEOMETRY_BIT);
+                process_resource(
+                    device.get(),
+                    descriptor_layout,
+                    result->_bindings,
+                    push_constants,
+                    compiler,
+                    resources.storage_images,
+                    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    VK_SHADER_STAGE_GEOMETRY_BIT);
             }
         }
 
@@ -577,13 +634,16 @@ namespace am {
 
     AM_NODISCARD CRcPtr<CPipeline> CPipeline::make(CRcPtr<CDevice> device, SComputeCreateInfo&& info) noexcept {
         AM_PROFILE_SCOPED();
-        auto result = new Self();
+        auto* result = new Self();
         VkPipelineShaderStageCreateInfo compute_stage = {};
         compute_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         compute_stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         compute_stage.pName = "main";
-        AM_LOG_INFO(device->logger(), "creating compute pipeline:");
-        AM_LOG_INFO(device->logger(), "- compute: {}", info.compute.string());
+        AM_LOG_INFO(
+            device->logger(),
+            "creating compute pipeline:\n"
+            "- compute: {}",
+            info.compute.string());
 
         auto binary = compile_shader(std::move(info.compute), shaderc_compute_shader, device->logger());
         AM_ASSERT(!binary.empty(), "cannot create compute pipeline without compute shader");
@@ -732,9 +792,12 @@ namespace am {
         return _layout._pipeline;
     }
 
-    AM_NODISCARD const SDescriptorBinding& CPipeline::bindings(const std::string& name) const noexcept {
+    AM_NODISCARD const SDescriptorBinding* CPipeline::bindings(const std::string& name) const noexcept {
         AM_PROFILE_SCOPED();
-        return _bindings.at(name);
+        AM_UNLIKELY_IF(!_bindings.contains(name)) {
+            return nullptr;
+        }
+        return &_bindings.at(name);
     }
 
     AM_NODISCARD SDescriptorSetLayout CPipeline::set_layout(uint32 index) const noexcept {
